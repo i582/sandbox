@@ -13,6 +13,10 @@ import {
     ExternalAddress,
     StateInit,
     OpenedContract,
+    beginCell,
+    storeStateInit,
+    storeShardAccount,
+    storeTransaction,
 } from '@ton/core';
 import { getSecureRandomBytes } from '@ton/crypto';
 
@@ -39,6 +43,8 @@ import { testSubwalletId } from '../utils/testTreasurySubwalletId';
 import { collectMetric } from '../metric/collectMetric';
 import { ContractsMeta } from '../meta/ContractsMeta';
 import { deepcopy } from '../utils/deepcopy';
+import {ContractRawData, sendToWebsocket} from "./web-ui-websocket";
+import {WebSocket} from "ws";
 
 const CREATE_WALLETS_PREFIX = 'CREATE_WALLETS';
 
@@ -201,6 +207,8 @@ export class Blockchain {
     protected nextCreateWalletIndex = 0;
     protected shouldRecordStorage = false;
     protected meta?: ContractsMeta;
+    protected webUI: boolean;
+    protected ws: WebSocket | undefined = undefined;
     protected prevBlocksInfo?: PrevBlocksInfo;
     protected randomSeed?: Buffer;
 
@@ -293,11 +301,13 @@ export class Blockchain {
         config?: BlockchainConfig;
         storage: BlockchainStorage;
         meta?: ContractsMeta;
+        webUI?: boolean;
     }) {
         this.networkConfig = blockchainConfigToBase64(opts.config);
         this.executor = opts.executor;
         this.storage = opts.storage;
         this.meta = opts.meta;
+        this.webUI = opts.webUI ?? false;
     }
 
     /**
@@ -554,7 +564,7 @@ export class Blockchain {
     }
 
     protected async processQueue(params?: MessageParams) {
-        return await this.lock.with(async () => {
+        const results = await this.lock.with(async () => {
             // Locked already
             const txs = this.txIter(false, params);
             const result: BlockchainTransaction[] = [];
@@ -565,6 +575,91 @@ export class Blockchain {
 
             return result;
         });
+
+        await this.sendTransactions(results);
+        return results;
+    }
+
+    private async sendTransactions(results: BlockchainTransaction[]) {
+        if (!this.webUI) {
+            return;
+        }
+
+        const testName = expect.getState().currentTestName;
+        const transactions = this.serializeTransactions(results);
+        const contracts: ContractRawData[] = await Promise.all(
+            this.storage.knownContracts().map(async contract => {
+                const state = contract.accountState;
+                const stateInit = beginCell();
+                if (state?.type === "active") {
+                    stateInit.store(storeStateInit(state.state));
+                }
+
+                const account = contract.account;
+                const accountCell = beginCell().store(storeShardAccount(account)).endCell();
+
+                const stateInitCell = stateInit.asCell();
+                return {
+                    address: contract.address.toString(),
+                    meta: this.meta?.get(contract.address),
+                    stateInit:
+                        stateInitCell.bits.length === 0 ? undefined : stateInitCell.toBoc().toString("hex"),
+                    account: accountCell.toBoc().toString("hex"),
+                };
+            }),
+        );
+
+        await this.websocketConnect();
+        sendToWebsocket(this.ws, {$: "test-data", testName, transactions, contracts});
+        this.websocketDisconnect();
+        return results;
+    }
+
+    protected serializeTransactions(transactions: BlockchainTransaction[]): string {
+        const fieldsToSave = ['blockchainLogs', 'vmLogs', 'debugLogs', 'shard', 'delay', 'totalDelay'];
+        const dump = {
+            transactions: transactions.map((t) => {
+                const tx = beginCell()
+                    .store(storeTransaction(t as Transaction))
+                    .endCell()
+                    .toBoc()
+                    .toString('hex');
+
+                return {
+                    transaction: tx,
+                    fields: fieldsToSave.reduce((acc: any, f) => {
+                        // @ts-ignore
+                        acc[f] = t[f];
+                        return acc;
+                    }, {}),
+                    parentId: t.parent?.lt.toString(),
+                    childrenIds: t.children?.map(c => c?.lt?.toString()),
+                };
+            }),
+        };
+        return JSON.stringify(dump, null, 2);
+    }
+
+    protected async websocketConnect(): Promise<void> {
+        if (this.ws !== undefined) return;
+        return new Promise((resolve, reject) => {
+            this.ws = new WebSocket("ws://localhost:8081");
+
+            this.ws.on("open", () => {
+                resolve();
+            });
+
+            this.ws.on("error", error => {
+                reject(error);
+            });
+        })
+    }
+
+    protected websocketDisconnect(): void {
+        if (this.ws) {
+            this.ws.close();
+            this.ws = undefined;
+        }
     }
 
     /**
@@ -847,13 +942,20 @@ export class Blockchain {
         config?: BlockchainConfig;
         storage?: BlockchainStorage;
         meta?: ContractsMeta;
+        webUI?: boolean;
     }) {
-        return new Blockchain({
+        const blockchain = new Blockchain({
             executor: opts?.executor ?? (await Executor.create()),
             storage: opts?.storage ?? new LocalBlockchainStorage(),
             // eslint-disable-next-line @typescript-eslint/no-require-imports
             meta: opts?.meta ?? require('@ton/test-utils')?.contractsMeta,
             ...opts,
         });
+        if (opts?.webUI) {
+            blockchain.verbosity.print = false
+            blockchain.verbosity.vmLogs = "vm_logs_verbose"
+            await blockchain.websocketConnect()
+        }
+        return blockchain;
     }
 }
