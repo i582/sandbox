@@ -1,5 +1,6 @@
 import {ContractMeta} from '../meta/ContractsMeta';
 import {WebSocket} from 'ws';
+import {Address, beginCell} from "@ton/core";
 
 export type ContractRawData = {
     readonly address: string;
@@ -13,6 +14,7 @@ export type MessageTestData = {
     readonly testName: string | undefined
     readonly transactions: string
     readonly contracts: readonly ContractRawData[]
+    readonly changes: ContractStateChange[]
 }
 
 export type Message = MessageTestData
@@ -27,5 +29,23 @@ export function sendToWebsocket(ws: WebSocket | undefined, data: Message): void 
     }
     if (ws && ws.readyState !== WebSocket.OPEN) {
         console.error('Cannot send, Websocket is not opem!');
+    }
+}
+
+export type ContractStateChange = {
+    readonly address: string | undefined,
+    readonly lt: string,
+    readonly before: string | undefined,
+    readonly after: string | undefined,
+};
+
+export function bigintToAddress(addr: bigint | undefined): Address | undefined {
+    if (addr === undefined) return undefined
+
+    try {
+        const slice = beginCell().storeUint(4, 3).storeUint(0, 8).storeUint(addr, 256).asSlice()
+        return slice.loadAddress()
+    } catch {
+        return undefined
     }
 }

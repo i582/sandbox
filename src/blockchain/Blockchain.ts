@@ -43,7 +43,7 @@ import { testSubwalletId } from '../utils/testTreasurySubwalletId';
 import { collectMetric } from '../metric/collectMetric';
 import { ContractsMeta } from '../meta/ContractsMeta';
 import { deepcopy } from '../utils/deepcopy';
-import {ContractRawData, sendToWebsocket} from "./web-ui-websocket";
+import {bigintToAddress, ContractRawData, ContractStateChange, sendToWebsocket} from "./web-ui-websocket";
 import {WebSocket} from "ws";
 
 const CREATE_WALLETS_PREFIX = 'CREATE_WALLETS';
@@ -564,30 +564,58 @@ export class Blockchain {
     }
 
     protected async processQueue(params?: MessageParams) {
-        const results = await this.lock.with(async () => {
+        const contractStateBeforeAfter: ContractStateChange[] = []
+
+        const txs = await this.lock.with(async () => {
+            const contractsBefore = await this.contractStates();
+
             // Locked already
             const txs = this.txIter(false, params);
             const result: BlockchainTransaction[] = [];
 
             for await (const tx of txs) {
+                const contractsAfter = await this.contractStates();
+
+                const txAddress = bigintToAddress(tx.address);
+                const contractBefore = contractsBefore.find(it => it?.address === txAddress?.toString())
+                const contractAfter = contractsAfter.find(it => it?.address === txAddress?.toString())
+
+                if (contractBefore && contractAfter) {
+                    contractStateBeforeAfter.push({
+                        address: txAddress?.toString(),
+                        lt: tx.lt.toString(),
+                        before: contractBefore.data,
+                        after: contractAfter.data,
+                    })
+                }
+
                 result.push(tx);
             }
 
             return result;
         });
 
-        await this.sendTransactions(results);
-        return results;
+        await this.sendTransactions(txs, contractStateBeforeAfter);
+        return txs;
     }
 
-    private async sendTransactions(results: BlockchainTransaction[]) {
+    private async sendTransactions(txs: BlockchainTransaction[], changes: ContractStateChange[]) {
         if (!this.webUI) {
             return;
         }
 
         const testName = expect.getState().currentTestName;
-        const transactions = this.serializeTransactions(results);
-        const contracts: ContractRawData[] = await Promise.all(
+        const transactions = this.serializeTransactions(txs);
+        const contracts = await this.contractsData();
+
+        await this.websocketConnect();
+        sendToWebsocket(this.ws, {$: "test-data", testName, transactions, contracts, changes});
+        this.websocketDisconnect();
+        return txs;
+    }
+
+    private async contractsData(): Promise<ContractRawData[]> {
+        return Promise.all(
             this.storage.knownContracts().map(async contract => {
                 const state = contract.accountState;
                 const stateInit = beginCell();
@@ -608,11 +636,22 @@ export class Blockchain {
                 };
             }),
         );
+    }
 
-        await this.websocketConnect();
-        sendToWebsocket(this.ws, {$: "test-data", testName, transactions, contracts});
-        this.websocketDisconnect();
-        return results;
+    private async contractStates(): Promise<({ address: string, data: string } | undefined)[]> {
+        return Promise.all(
+            this.storage.knownContracts().map(async contract => {
+                const state = contract.accountState;
+                if (state?.type === "active" && state.state.data) {
+                    return {
+                        address: contract.address.toString(),
+                        data: state.state.data.toBoc().toString("hex"),
+                    }
+                }
+
+                return undefined;
+            }),
+        );
     }
 
     protected serializeTransactions(transactions: BlockchainTransaction[]): string {
