@@ -3,6 +3,7 @@ import EventEmitter from 'node:events';
 import { TupleItem } from '@ton/core';
 
 import { Executor, GetMethodArgs, RunTransactionArgs } from '../executor/Executor';
+import {underline} from "chalk";
 
 export type SourceMapEntry = {
     path: string;
@@ -96,6 +97,7 @@ export class Debuggee extends EventEmitter {
     globals: GlobalEntry[] = [];
     debugMarks: DebugMarks = new Map();
     tryContexts: TryContext[] = [];
+    currentLine: number = 1
     finishedCallback: (v: unknown) => void;
 
     constructor(executor: Executor, finishedCallback: (v: unknown) => void) {
@@ -170,9 +172,9 @@ export class Debuggee extends EventEmitter {
     }
 
     startTransaction(args: RunTransactionArgs) {
-        const { emptr, res } = this.executor.sbsTransactionSetup(args);
-        if (res !== 1) {
-            throw new Error('Could not setup SBS transaction, result: ' + res);
+        const { emptr, result } = this.executor.sbsTransactionSetup(args);
+        if (!result.success) {
+            throw new Error('Could not setup SBS transaction, result: ' + JSON.stringify(result.error));
         }
         this.ptr = emptr;
         this.debugType = 'tx';
@@ -202,6 +204,15 @@ export class Debuggee extends EventEmitter {
                 return this.executor.sbsGetMethodCodePos(this.ptr);
             case 'tx':
                 return this.executor.sbsTransactionCodePos(this.ptr);
+        }
+    }
+
+    stackTrace() {
+        switch (this.debugType) {
+            case 'get':
+                return [] // this.executor.sbsGetMethodCodePos(this.ptr);
+            case 'tx':
+                return this.executor.sbsTransactionStacktrace(this.ptr);
         }
     }
 
@@ -324,33 +335,44 @@ export class Debuggee extends EventEmitter {
     }
 
     currentSourceMapEntry(honorStepped: boolean) {
-        const dms = this.currentDebugMarks();
-        if (dms === undefined) {
-            return undefined;
-        }
+        return {
+            path: "/Users/petrmakhnev/tolk-tests/simple-counter/contracts/counter.tolk",
+            line: 34,
+            function: "main",
+            contextId: 0,
+            requireContextId: 0,
+            type: 'statement',
+            variables: ["c7"],
+            firstStatement: true,
+        } satisfies SourceMapEntry
 
-        let currentContextId: number | undefined;
-        let stepped: boolean | undefined;
-        if (this.frames.length > 0) {
-            const topFrame = this.frames[this.frames.length - 1];
-            currentContextId = topFrame.contextId;
-            stepped = topFrame.stepped;
-        }
-
-        for (const dm of dms) {
-            const entry = this.sourceMap[dm];
-            if (
-                (entry.type === 'statement' &&
-                    entry.firstStatement &&
-                    entry.requireContextId === undefined &&
-                    (stepped || !honorStepped)) ||
-                entry.requireContextId === currentContextId
-            ) {
-                return entry;
-            }
-        }
-
-        return undefined;
+        // const dms = this.currentDebugMarks();
+        // if (dms === undefined) {
+        //     return undefined;
+        // }
+        //
+        // let currentContextId: number | undefined;
+        // let stepped: boolean | undefined;
+        // if (this.frames.length > 0) {
+        //     const topFrame = this.frames[this.frames.length - 1];
+        //     currentContextId = topFrame.contextId;
+        //     stepped = topFrame.stepped;
+        // }
+        //
+        // for (const dm of dms) {
+        //     const entry = this.sourceMap[dm];
+        //     if (
+        //         (entry.type === 'statement' &&
+        //             entry.firstStatement &&
+        //             entry.requireContextId === undefined &&
+        //             (stepped || !honorStepped)) ||
+        //         entry.requireContextId === currentContextId
+        //     ) {
+        //         return entry;
+        //     }
+        // }
+        //
+        // return undefined;
     }
 
     breakpointKey(path: string, line: number) {
@@ -560,36 +582,55 @@ export class Debuggee extends EventEmitter {
                 return;
             }
 
-            const triggeredTryParam = this.getTriggeredTryParam();
-            if (triggeredTryParam >= 0) {
-                if (triggeredTryParam !== this.tryContexts.length - 1) {
-                    throw new Error(
-                        `Got triggered try param ${triggeredTryParam} but expected ${this.tryContexts.length - 1}`,
-                    );
-                }
-                const tryContext = this.tryContexts[triggeredTryParam];
-                this.tryContexts.pop();
-                this.setTryParams(-1, -1);
-                this.frames = this.frames.slice(0, tryContext.frameDepth);
-                this.frames[this.frames.length - 1].contextId = tryContext.contextId;
-            }
+            // console.log(this.codePos())
+            console.log(this.stackTrace())
 
-            if (this.getContDistinguisherTriggered()) {
-                const distinguisher = this.getContDistinguisher();
-                this.setContDistinguishers(-1, -1, -1);
-                if (distinguisher >= 0 && this.frames.length > 0) {
-                    const topFrame = this.frames[this.frames.length - 1];
-                    topFrame.contextId = distinguisher;
-                }
-            }
+            // const triggeredTryParam = this.getTriggeredTryParam();
+            // if (triggeredTryParam >= 0) {
+            //     if (triggeredTryParam !== this.tryContexts.length - 1) {
+            //         throw new Error(
+            //             `Got triggered try param ${triggeredTryParam} but expected ${this.tryContexts.length - 1}`,
+            //         );
+            //     }
+            //     const tryContext = this.tryContexts[triggeredTryParam];
+            //     this.tryContexts.pop();
+            //     this.setTryParams(-1, -1);
+            //     this.frames = this.frames.slice(0, tryContext.frameDepth);
+            //     this.frames[this.frames.length - 1].contextId = tryContext.contextId;
+            // }
+            //
+            // if (this.getContDistinguisherTriggered()) {
+            //     const distinguisher = this.getContDistinguisher();
+            //     this.setContDistinguishers(-1, -1, -1);
+            //     if (distinguisher >= 0 && this.frames.length > 0) {
+            //         const topFrame = this.frames[this.frames.length - 1];
+            //         topFrame.contextId = distinguisher;
+            //     }
+            // }
 
             const sme = this.currentSourceMapEntry(true);
             if (sme !== undefined) {
-                const { stopStepping } = this.applySourceMapEntry(sme, until);
-                if (stopStepping) {
-                    return;
+                // const { stopStepping } = this.applySourceMapEntry(sme, until);
+                // if (stopStepping) {
+                //     return;
+                // }
+
+                this.frames[0] = {
+                    function: "main",
+                    path: "/Users/petrmakhnev/tolk-tests/simple-counter/contracts/counter.tolk",
+                    line: this.currentLine++,
+                    contextId: 0,
+                    nextContextId: 0,
+                    stepped: true,
+                    shouldTryNoStep: false,
                 }
+
+                this.sendEvent('stopOnStep');
+                return
             }
+
+            this.sendEvent('stopOnStep');
+            return
         }
     }
 

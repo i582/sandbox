@@ -337,6 +337,15 @@ export class SmartContract {
             } else if (uninitialized) {
                 // eslint-disable-next-line no-console
                 console.log('Debugging uninitialized accounts is unsupported in debugger beta');
+
+                const executor = await this.blockchain.getDebuggerExecutor();
+                return await this.runCommon(() => debugContext.debugTransaction(executor, args, {
+                    sourceMap: {},
+                    globals: [{
+                        name: "globalVar"
+                    }],
+                    marks: new Map()
+                }));
             }
         }
 

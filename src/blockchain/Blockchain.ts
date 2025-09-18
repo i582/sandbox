@@ -55,6 +55,8 @@ function createWalletsSeed(idx: number) {
 
 const LT_ALIGN = 1000000n;
 
+declare const expect: jest.Expect;
+
 export type ExternalOutInfo = {
     type: 'external-out';
     src: Address;
@@ -632,7 +634,7 @@ export class Blockchain {
             return;
         }
 
-        const testName = expect.getState().currentTestName;
+        const testName = "unknown" // expect === undefined ? "" : expect.getState().currentTestName;
         const transactions = this.serializeTransactions(txs);
         const contracts = await this.contractsData();
 
@@ -850,11 +852,12 @@ export class Blockchain {
      * Opens contract. Returns proxy that substitutes the blockchain Provider in methods starting with get and set.
      *
      * @param contract Contract to open.
+     * @param name Name of contract.
      *
      * @example
      * const contract = blockchain.openContract(new Contract(address));
      */
-    openContract<T extends Contract>(contract: T) {
+    openContract<T extends Contract>(contract: T, name?: string) {
         let address: Address;
         let init: StateInit | undefined = undefined;
 
@@ -872,7 +875,7 @@ export class Blockchain {
             init = contract.init;
         }
 
-        this.meta?.upsert(address, { wrapperName: contract?.constructor?.name, abi: contract.abi });
+        this.meta?.upsert(address, { wrapperName: name ?? contract?.constructor?.name, abi: contract.abi });
 
         const provider = this.provider(address, init);
 

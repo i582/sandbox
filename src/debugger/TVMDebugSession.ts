@@ -20,6 +20,7 @@ export class TVMDebugSession extends LoggingDebugSession {
     static readonly stackFrameID = 1;
     static readonly localVariablesReference = 1;
     static readonly globalVariablesReference = 2;
+    static readonly stackReference = 3;
 
     debuggee: Debuggee;
 
@@ -317,6 +318,11 @@ export class TVMDebugSession extends LoggingDebugSession {
                 variablesReference: TVMDebugSession.globalVariablesReference,
                 expensive: false,
             },
+            {
+                name: 'Stack',
+                variablesReference: TVMDebugSession.stackReference,
+                expensive: false,
+            },
         ];
 
         this.sendResponse(response);
@@ -333,9 +339,25 @@ export class TVMDebugSession extends LoggingDebugSession {
 
         let vars: Variable[] | undefined = undefined;
         if (args.variablesReference === TVMDebugSession.localVariablesReference) {
-            vars = this.debuggee.getLocalVariables();
+            // vars = this.debuggee.getLocalVariables();
+            vars = [
+                {
+                    name: "c7",
+                    value: this.debuggee.getC7()
+                }
+            ]
         } else if (args.variablesReference === TVMDebugSession.globalVariablesReference) {
             vars = this.debuggee.getGlobalVariables();
+            vars?.push({
+                name: "c7",
+                value: this.debuggee.getC7()
+            })
+        } else if (args.variablesReference === TVMDebugSession.stackReference) {
+            const stack = [...this.debuggee.getStack().entries()].reverse();
+            vars = stack.map(([index, it]) => ({
+                name: `stack[${stack.length - 1 - index}]`,
+                value: it,
+            }));
         }
 
         if (vars === undefined) {
