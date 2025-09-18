@@ -36,11 +36,12 @@ import { testSubwalletId } from '../utils/testTreasurySubwalletId';
 import { collectMetric } from '../metric/collectMetric';
 import { ContractsMeta } from '../meta/ContractsMeta';
 import { deepcopy } from '../utils/deepcopy';
-import { collectAsmCoverage, collectTxsCoverage, mergeCoverages, Coverage } from '../coverage';
+import {collectAsmCoverage, collectTxsCoverage, mergeCoverages, Coverage, collectTolkCoverage} from '../coverage';
 import { MessageQueueManager } from './MessageQueueManager';
 import { AsyncLock } from '../utils/AsyncLock';
 import { BlockchainSnapshot } from './BlockchainSnapshot';
 import { requireOptional } from '../utils/require';
+import {SourceMap} from "ton-assembly/dist/trace";
 
 const CREATE_WALLETS_PREFIX = 'CREATE_WALLETS';
 
@@ -816,6 +817,7 @@ export class Blockchain {
      * Coverage is collected at the TVM assembly instruction level from all executed transactions and get method calls.
      *
      * @param contract Contract to analyze coverage for
+     * @param sourceMap
      * @returns Coverage object with detailed coverage data
      * @throws Error if the contract has no code
      * @throws Error if verbose VM logs are not enabled (blockchain.verbosity.vmLogs !== "vm_logs_verbose")
@@ -836,14 +838,14 @@ export class Blockchain {
      * const htmlReport = coverage?.report("html");
      * await fs.writeFile("coverage.html", htmlReport);
      */
-    public coverage(contract: Contract): Coverage | undefined {
+    public coverage(contract: Contract, sourceMap?: SourceMap): Coverage | undefined {
         const code = contract.init?.code;
         if (!code) {
             throw new Error('No code is available for contract');
         }
 
         const address = contract.address;
-        return this.coverageForCell(code, address);
+        return this.coverageForCell(code, address, sourceMap);
     }
 
     protected registerTxsForCoverage(txs: BlockchainTransaction[]) {
@@ -863,6 +865,7 @@ export class Blockchain {
      * @param code Cell containing contract code to analyze
      * @param address Optional contract address to filter transactions by.
      *                If provided, only transactions from this address will be analyzed
+     * @param sourceMap
      * @returns Coverage object with detailed coverage data
      * @throws Error if verbose VM logs are not enabled (blockchain.verbosity.vmLogs !== "vm_logs_verbose")
      *
@@ -876,13 +879,13 @@ export class Blockchain {
      *
      * console.log(coverage?.summary());
      */
-    public coverageForCell(code: Cell, address?: Address): Coverage | undefined {
+    public coverageForCell(code: Cell, address?: Address, sourceMap?: SourceMap): Coverage | undefined {
         if (!this.collectCoverage || this.verbosity.vmLogs !== 'vm_logs_verbose') {
             return undefined;
         }
 
-        const txs = this.coverageTransactions.flatMap((tx) => collectTxsCoverage(code, address, tx));
-        const gets = this.coverageGetMethodResults.flatMap((get) => collectAsmCoverage(code, get.vmLogs));
+        const txs = this.coverageTransactions.flatMap((tx) => collectTxsCoverage(code, address, tx, sourceMap));
+        const gets = this.coverageGetMethodResults.flatMap((get) => sourceMap ? collectTolkCoverage(code, get.vmLogs, sourceMap) : collectAsmCoverage(code, get.vmLogs));
 
         const coverages = [...txs, ...gets];
         return new Coverage(mergeCoverages(...coverages));
@@ -918,7 +921,7 @@ export class Blockchain {
         return new Blockchain({
             executor: opts?.executor ?? (await Executor.create()),
             storage: opts?.storage ?? new LocalBlockchainStorage(),
-            meta: opts?.meta ?? requireOptional('@ton/test-utils')?.contractsMeta,
+            meta: opts?.meta, // ?? requireOptional('@ton/test-utils')?.contractsMeta,
             ...opts,
         });
     }

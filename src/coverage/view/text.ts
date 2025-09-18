@@ -1,33 +1,45 @@
-import {CoverageData, CoverageSummary, generateCoverageSummary, InstructionStat, Line} from "../data";
+import {CoverageData, CoverageSummary, generateCoverageSummary, InstructionStat, Line, FunctionStat, generateFunctionStats} from "../data";
 
 export function generateTextReport(coverage: CoverageData): string {
     const summary = generateCoverageSummary(coverage);
+    const functionStats = generateFunctionStats(coverage);
 
-    const lines = coverage.lines;
-    const maxLineNumberWidth = lines.length.toString().length;
-
-    const annotatedLines = lines
-        .map((line, index) => {
-            const {gasInfo, hitsInfo, status} = lineInfo(line);
-
-            const lineNumber = index + 1;
-            const lineNumberPres = lineNumber.toString().padStart(maxLineNumberWidth);
-
-            return `${lineNumberPres} ${status}| ${line.line.padEnd(40)} |${gasInfo.padEnd(10)} |${hitsInfo}`;
-        })
-        .join("\n");
+    const totalFunctionInstructions = functionStats.reduce((sum, stat) => sum + stat.totalInstructions, 0);
 
     const summaryText = [
         "Coverage Summary:",
         `Lines: ${summary.coveredLines}/${summary.totalLines} (${summary.coveragePercentage.toFixed(2)}%)`,
         `Total Gas: ${summary.totalGas}`,
-        `Total Hits: ${summary.totalHits}`,
+        `Total ${functionStats.length > 0 ? "Functions" : "Instructions"} Executed: ${functionStats.length > 0 ? functionStats.length : summary.totalHits}`,
+        ...(functionStats.length > 0 ? [`Total Function Instructions: ${totalFunctionInstructions}`] : []),
         "",
-        "Instruction Stats:",
-        ...instructionsStats(summary),
+        `${functionStats.length > 0 ? "Function" : "Instruction"} Stats:`,
+        ...(functionStats.length > 0 ? functionStatsText(functionStats, summary.totalGas, totalFunctionInstructions) : instructionsStats(summary)),
     ].join("\n");
 
-    return `${summaryText}\n\nAnnotated Code:\n${annotatedLines}`;
+    const fileSections = Array.from(coverage.lines.entries())
+        .filter(([filePath]) => {
+            const fileExecLines = coverage.executableLines?.get(filePath);
+            return fileExecLines && fileExecLines.size > 0;
+        })
+        .map(([filePath, fileLines]) => {
+            const maxLineNumberWidth = fileLines.length.toString().length;
+
+            const annotatedLines = fileLines
+                .map((line, index) => {
+                    const {gasInfo, hitsInfo, status} = lineInfo(line);
+
+                    const lineNumber = index + 1;
+                    const lineNumberPres = lineNumber.toString().padStart(maxLineNumberWidth);
+
+                    return `${lineNumberPres} ${status}| ${line.line.padEnd(40)} |${gasInfo.padEnd(10)} |${hitsInfo}`;
+                })
+                .join("\n");
+
+            return `\n${filePath}:\n${annotatedLines}`;
+        }).join("\n");
+
+    return `${summaryText}\n\nAnnotated Code:${fileSections}`;
 }
 
 type LineInfo = {
@@ -85,4 +97,35 @@ function formatInstructionStat(
     const percent = ((stat.totalGas / totalGas) * 100).toFixed(2).padStart(6);
 
     return `  ${name} | ${totalGasStr} gas | ${hitsStr} hits | ${avgGasStr} avg gas | ${percent}%`;
+}
+
+function functionStatsText(functionStats: readonly FunctionStat[], totalGas: number, totalInstructions: number) {
+    if (functionStats.length === 0) {
+        return [];
+    }
+
+    const maxNameWidth = Math.max(...functionStats.map(stat => stat.name.length));
+    const maxGasWidth = Math.max(...functionStats.map(stat => stat.totalGas.toString().length));
+    const maxInstructionsWidth = Math.max(...functionStats.map(stat => stat.totalInstructions.toString().length));
+
+    return functionStats.map(stat =>
+        formatFunctionStat(stat, totalGas, totalInstructions, maxNameWidth, maxGasWidth, maxInstructionsWidth)
+    );
+}
+
+function formatFunctionStat(
+    stat: FunctionStat,
+    totalGas: number,
+    totalInstructions: number,
+    nameWidth: number,
+    gasWidth: number,
+    instructionsWidth: number
+) {
+    const name = stat.name.padEnd(nameWidth);
+    const totalGasStr = stat.totalGas.toString().padStart(gasWidth);
+    const totalInstructionsStr = stat.totalInstructions.toString().padStart(instructionsWidth);
+    const gasPercent = ((stat.totalGas / totalGas) * 100).toFixed(2).padStart(6);
+    const instructionsPercent = ((stat.totalInstructions / totalInstructions) * 100).toFixed(2).padStart(6);
+
+    return `  ${name} | ${totalGasStr} gas | ${totalInstructionsStr} instr | ${gasPercent}% gas | ${instructionsPercent}% instr`;
 }

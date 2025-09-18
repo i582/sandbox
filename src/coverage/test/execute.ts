@@ -6,7 +6,7 @@ import type {ContractGetMethodResult} from "@ton/core/dist/contract/ContractProv
 
 export type ExtendedGetResult = ContractGetMethodResult & { vmLogs: string };
 
-export async function executeInstructions(code: runtime.Instr[], id: number = 0): Promise<[TupleReader, string]> {
+export async function executeInstructions(code: runtime.Instr[], id: number = 0, stack?: TupleBuilder): Promise<[TupleReader, string]> {
     class TestContract implements Contract {
         public readonly address: Address;
         public readonly init?: StateInit;
@@ -29,7 +29,7 @@ export async function executeInstructions(code: runtime.Instr[], id: number = 0)
             provider: ContractProvider,
             id: number,
         ): Promise<[TupleReader, string]> {
-            const builder = new TupleBuilder();
+            const builder = stack ?? new TupleBuilder();
             const res = (await provider.get(id, builder.build())) as ExtendedGetResult;
             return [res.stack, res.vmLogs];
         }

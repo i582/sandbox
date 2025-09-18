@@ -1,9 +1,12 @@
 import type {trace} from "ton-assembly";
 import {Cell} from "@ton/core";
+import {SourceMap} from "ton-assembly/dist/trace";
 
 export type CoverageData = {
     readonly code: Cell;
-    readonly lines: readonly Line[];
+    readonly lines: Map<string, readonly Line[]>;
+    readonly gasPerFunction?: Map<string, { gas: number; instructions: number }>;
+    readonly executableLines?: Map<string, Set<number>>;
 };
 
 export type Line = {
@@ -30,6 +33,12 @@ export type InstructionStat = {
     readonly totalGas: number
     readonly totalHits: number
     readonly avgGas: number
+}
+
+export type FunctionStat = {
+    readonly name: string
+    readonly totalGas: number
+    readonly totalInstructions: number
 }
 
 export type CoverageSummary = {
@@ -93,6 +102,112 @@ export function buildLineInfo(trace: trace.TraceInfo, asm: string): readonly Lin
     });
 }
 
+export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: SourceMap): {
+    lines: Map<string, Line[]>,
+    gasPerFunction: Map<string, { gas: number; instructions: number }>,
+    executableLines: Map<string, Set<number>>
+} => {
+    const lines = new Map<string, Line[]>()
+    const executableLines = new Map<string, Set<number>>()
+
+    if (sourceMap?.files) {
+        sourceMap.files.forEach(file => {
+            if (!file.is_stdlib) { // Skip stdlib files
+                const fileLines = file.content.split("\n")
+                lines.set(file.path, fileLines.map(line => ({
+                    line,
+                    info: { $: "Skipped" } as Skipped
+                })))
+                executableLines.set(file.path, new Set())
+            }
+        })
+    }
+
+    // Fill executable lines from source map
+    sourceMap?.locations.forEach(location => {
+        const fileExecLines = executableLines.get(location.file) || new Set()
+        fileExecLines.add(location.line)
+        executableLines.set(location.file, fileExecLines)
+    })
+
+    const perLineSteps: Map<string, Map<number, trace.Step[]>> = new Map()
+    const stepsPerFunction: Map<string, trace.Step[]> = new Map()
+
+    for (const step of trace.steps) {
+        if (step.sourceMapEntries.length === 0) continue
+        for (const entry of step.sourceMapEntries) {
+            const filePath = entry.file
+            const line = (entry.line ?? 0) + (entry.line_offset ?? 0)
+
+            // Initialize file steps map if not exists
+            if (!perLineSteps.has(filePath)) {
+                perLineSteps.set(filePath, new Map())
+            }
+            const fileSteps = perLineSteps.get(filePath)!
+
+            fileSteps.set(line, [...(fileSteps.get(line) ?? []), step])
+
+            if (entry.inlined_to_func !== undefined) {
+                // inlined
+                stepsPerFunction.set(entry.inlined_to_func, [...(stepsPerFunction.get(entry.inlined_to_func) ?? []), step])
+                continue
+            }
+            stepsPerFunction.set(entry.func, [...(stepsPerFunction.get(entry.func) ?? []), step])
+        }
+    }
+
+    const gasPerFunction = new Map(stepsPerFunction.entries().map(([func, steps]) => {
+        const gas = steps.flatMap(step => normalizeGas(step.gasCost)).reduce((acc, gas) => acc + gas, 0);
+        const instructions = steps.length;
+        return [func, { gas, instructions }];
+    }));
+
+    const resultLines = new Map<string, Line[]>()
+
+    for (const [filePath, fileLines] of lines) {
+        const fileSteps = perLineSteps.get(filePath) || new Map()
+        const fileExecLines = executableLines.get(filePath) || new Set()
+
+        const processedLines = fileLines.map((lineObj, idx): Line => {
+            const lineNumber = idx + 1
+            const infos = fileSteps.get(lineNumber)
+
+            if (infos) {
+                const gasInfo = infos.flatMap((step: trace.Step) => normalizeGas(step.gasCost)).reduce((acc: number, gas: number) => acc + gas, 0)
+
+                return {
+                    line: lineObj.line,
+                    info: {
+                        $: "Covered",
+                        hits: infos.length,
+                        gasCosts: [gasInfo],
+                    } as Covered,
+                }
+            }
+
+            if (!isExecutableLine(lineObj.line) || !fileExecLines.has(lineNumber)) {
+                return {
+                    line: lineObj.line,
+                    info: {
+                        $: "Skipped",
+                    },
+                }
+            }
+
+            return {
+                line: lineObj.line,
+                info: {
+                    $: "Uncovered",
+                },
+            }
+        })
+
+        resultLines.set(filePath, processedLines)
+    }
+
+    return {lines: resultLines, gasPerFunction, executableLines}
+}
+
 function normalizeGas(gas: number): number {
     if (gas > 10000) {
         // Normalize first SETCP to normal value
@@ -112,12 +227,27 @@ export function isExecutableLine(line: string): boolean {
 }
 
 export function generateCoverageSummary(coverage: CoverageData): CoverageSummary {
-    const lines = coverage.lines;
-    const totalExecutableLines = lines.filter(line => isExecutableLine(line.line)).length;
+    let totalExecutableLines = 0;
+    let coveredLines = 0;
 
-    const coveredLines = lines.filter(
-        line => isExecutableLine(line.line) && line.info.$ === "Covered",
-    ).length;
+    for (const [filePath, fileLines] of coverage.lines) {
+        const fileExecLines = coverage.executableLines?.get(filePath) || new Set();
+
+        fileLines.forEach((line, index) => {
+            const lineNumber = index + 1;
+            const isLineExecutable = coverage.executableLines
+                ? fileExecLines.has(lineNumber)
+                : isExecutableLine(line.line);
+
+            if (isLineExecutable) {
+                totalExecutableLines++;
+                if (line.info.$ === "Covered") {
+                    coveredLines++;
+                }
+            }
+        });
+    }
+
     const uncoveredLines = totalExecutableLines - coveredLines;
     const coveragePercentage = totalExecutableLines === 0 ? 0 : (coveredLines / totalExecutableLines) * 100;
 
@@ -127,20 +257,22 @@ export function generateCoverageSummary(coverage: CoverageData): CoverageSummary
     const instructionMap: Map<string, { readonly totalGas: number; readonly hits: number }> =
         new Map();
 
-    for (const line of lines) {
-        if (line.info.$ !== "Covered") continue;
+    for (const [, fileLines] of coverage.lines) {
+        for (const line of fileLines) {
+            if (line.info.$ !== "Covered") continue;
 
-        const lineGas = line.info.gasCosts.reduce((sum, gas) => sum + gas, 0);
-        totalGas += lineGas;
-        totalHits += line.info.hits;
-        const trimmedLine = line.line.trim();
-        const instructionName = trimmedLine.split(/\s+/)[0];
-        if (instructionName !== undefined) {
-            const current = instructionMap.get(instructionName) ?? {totalGas: 0, hits: 0};
-            instructionMap.set(instructionName, {
-                totalGas: current.totalGas + lineGas,
-                hits: current.hits + line.info.hits,
-            });
+            const lineGas = line.info.gasCosts.reduce((sum, gas) => sum + gas, 0);
+            totalGas += lineGas;
+            totalHits += line.info.hits;
+            const trimmedLine = line.line.trim();
+            const instructionName = trimmedLine.split(/\s+/)[0];
+            if (instructionName !== undefined) {
+                const current = instructionMap.get(instructionName) ?? {totalGas: 0, hits: 0};
+                instructionMap.set(instructionName, {
+                    totalGas: current.totalGas + lineGas,
+                    hits: current.hits + line.info.hits,
+                });
+            }
         }
     }
 
@@ -164,23 +296,92 @@ export function generateCoverageSummary(coverage: CoverageData): CoverageSummary
     };
 }
 
+export function generateFunctionStats(coverage: CoverageData): FunctionStat[] {
+    if (!coverage.gasPerFunction) {
+        return [];
+    }
+
+    return [...coverage.gasPerFunction.entries()]
+        .map(([name, stats]) => ({
+            name,
+            totalGas: stats.gas,
+            totalInstructions: stats.instructions,
+        }))
+        .sort((a, b) => b.totalGas - a.totalGas);
+}
+
 export function mergeCoverages(...coverages: readonly CoverageData[]): CoverageData {
     if (coverages.length === 0) {
         return {
             code: new Cell(),
-            lines: [],
+            lines: new Map(),
         };
     }
 
-    let allLines: readonly Line[] = coverages[0]?.lines ?? [];
-    for (const coverage of coverages.slice(1)) {
-        allLines = mergeTwoLines(allLines, coverage.lines);
+    if (coverages.length === 1) {
+        return coverages[0];
     }
+
+    const allFilePaths = new Set<string>();
+    coverages.forEach(coverage => {
+        coverage.lines.forEach((_, filePath) => allFilePaths.add(filePath));
+    });
+
+    const mergedLines = new Map<string, readonly Line[]>();
+    for (const filePath of allFilePaths) {
+        let mergedFileLines: readonly Line[] | undefined;
+
+        coverages.forEach(coverage => {
+            const fileLines = coverage.lines.get(filePath);
+            if (fileLines) {
+                if (mergedFileLines === undefined) {
+                    mergedFileLines = fileLines;
+                } else {
+                    mergedFileLines = mergeTwoLines(mergedFileLines, fileLines);
+                }
+            }
+        });
+
+        if (mergedFileLines) {
+            mergedLines.set(filePath, mergedFileLines);
+        }
+    }
+
+    const mergedGasPerFunction = new Map<string, { gas: number; instructions: number }>();
+    coverages.forEach(coverage => {
+        if (coverage.gasPerFunction) {
+            coverage.gasPerFunction.forEach((stats, funcName) => {
+                const existing = mergedGasPerFunction.get(funcName);
+                if (existing) {
+                    mergedGasPerFunction.set(funcName, {
+                        gas: existing.gas + stats.gas,
+                        instructions: existing.instructions + stats.instructions
+                    });
+                } else {
+                    mergedGasPerFunction.set(funcName, { ...stats });
+                }
+            });
+        }
+    });
+
+    const mergedExecutableLines = new Map<string, Set<number>>();
+    coverages.forEach(coverage => {
+        if (coverage.executableLines) {
+            coverage.executableLines.forEach((lines, filePath) => {
+                const existing = mergedExecutableLines.get(filePath) || new Set<number>();
+                lines.forEach(lineNum => existing.add(lineNum));
+                mergedExecutableLines.set(filePath, existing);
+            });
+        }
+    });
+
     return {
-        code: coverages[0]?.code ?? new Cell(),
-        lines: allLines,
+        code: coverages[0].code,
+        lines: mergedLines,
+        gasPerFunction: mergedGasPerFunction.size > 0 ? mergedGasPerFunction : undefined,
+        executableLines: mergedExecutableLines.size > 0 ? mergedExecutableLines : undefined,
     };
-};
+}
 
 export function mergeTwoLines(
     first: readonly Line[],

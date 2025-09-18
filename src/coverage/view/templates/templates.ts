@@ -176,8 +176,107 @@ export const MAIN_TEMPLATE = `<!doctype html>
                 border-radius: 3px;
             }
 
-            .code-container {
+            .tabs-container {
                 margin: 20px;
+            }
+
+            .tab-buttons {
+                display: flex;
+                border-bottom: 1px solid #ddd;
+                margin-bottom: 10px;
+                overflow-x: auto;
+                scrollbar-width: thin;
+                scrollbar-color: #ccc transparent;
+            }
+
+            .tab-button {
+                background: none;
+                border: none;
+                padding: 10px 20px;
+                cursor: pointer;
+                border-bottom: 2px solid transparent;
+                font-size: 14px;
+                font-weight: 500;
+            }
+
+            .tab-button:hover {
+                background-color: #f5f5f5;
+            }
+
+            .tab-button.active {
+                border-bottom-color: var(--covered-dark);
+                color: var(--covered-dark);
+            }
+
+            .tabs-content {
+                position: relative;
+            }
+
+            .tab-content {
+                display: none;
+            }
+
+            .tab-content.active {
+                display: block;
+            }
+
+            .file-header {
+                background-color: #f8f8f8;
+                padding: 10px 15px;
+                font-weight: bold;
+                font-size: 14px;
+                border-bottom: 1px solid #ddd;
+                font-family: monospace;
+            }
+
+            .file-summary-container {
+                margin-bottom: 20px;
+                background-color: #f9f9f9;
+                border-radius: 5px;
+                padding: 15px;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            }
+
+            .file-summary-container h3 {
+                margin: 0 0 15px 0;
+                color: #333;
+                font-size: 1.1rem;
+            }
+
+            .file-summary-table {
+                width: 100%;
+                border-collapse: collapse;
+                background-color: white;
+                border-radius: 4px;
+                overflow: hidden;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            }
+
+            .file-summary-table th {
+                background-color: #f0f0f0;
+                padding: 12px 15px;
+                text-align: left;
+                font-weight: 600;
+                font-size: 0.9rem;
+                color: #333;
+                border-bottom: 2px solid #ddd;
+            }
+
+            .file-summary-table td {
+                padding: 10px 15px;
+                border-bottom: 1px solid #eee;
+                font-size: 0.9rem;
+            }
+
+            .file-summary-table tr:hover {
+                background-color: #f8f8f8;
+            }
+
+            .file-summary-table tr:last-child td {
+                border-bottom: none;
+            }
+
+            .code-container {
                 border: 1px solid var(--line-border);
                 border-radius: 5px;
                 overflow: hidden;
@@ -397,7 +496,14 @@ export const MAIN_TEMPLATE = `<!doctype html>
                 })
 
                 function getColumnIndex(column) {
-                    const columns = {
+                    const isFunctionStats = table.querySelector('th[data-column="instructions"]') !== null;
+                    const columns = isFunctionStats ? {
+                        name: 1,
+                        gas: 2,
+                        instructions: 3,
+                        gasPercent: 4,
+                        instructionsPercent: 5,
+                    } : {
                         name: 1,
                         gas: 2,
                         hits: 3,
@@ -415,6 +521,24 @@ export const MAIN_TEMPLATE = `<!doctype html>
                         codeContainer.classList.remove("show-total-gas")
                     }
                 })
+
+                window.showTab = function(tabId) {
+                    const tabContents = document.querySelectorAll('.tab-content')
+                    tabContents.forEach(content => content.classList.remove('active'))
+
+                    const tabButtons = document.querySelectorAll('.tab-button')
+                    tabButtons.forEach(button => button.classList.remove('active'))
+
+                    const selectedTab = document.getElementById(tabId)
+                    if (selectedTab) {
+                        selectedTab.classList.add('active')
+                    }
+
+                    const clickedButton = document.querySelector('[data-tab-id="' + tabId + '"]')
+                    if (clickedButton) {
+                        clickedButton.classList.add('active')
+                    }
+                }
 
                 const progressBar = document.getElementById("coverage-progress")
                 const coveragePercentage = document
@@ -460,34 +584,20 @@ export const SUMMARY_TEMPLATE = `<div class="summary">
             <span class="stat-value">{{total_gas}}</span>
         </div>
         <div class="stat-item">
-            <span class="stat-label">Instructions Executed:</span>
+            <span class="stat-label">{{stats_label}}:</span>
             <span class="stat-value">{{total_hits}}</span>
         </div>
     </div>
     <div class="instructions-section">
         <details>
             <summary>
-                <h2>Instruction Statistics <span class="toggle-icon">▼</span></h2>
+                <h2>{{stats_type}} <span class="toggle-icon">▼</span></h2>
             </summary>
             <div class="instructions-content">
                 <table id="instructionsTable">
                     <thead>
                         <tr>
-                            <th class="sortable" data-column="name">
-                                Instruction <span class="sort-icon">↕</span>
-                            </th>
-                            <th class="sortable" data-column="gas">
-                                Total Gas <span class="sort-icon">↕</span>
-                            </th>
-                            <th class="sortable" data-column="hits">
-                                Hits <span class="sort-icon">↕</span>
-                            </th>
-                            <th class="sortable" data-column="avgGas">
-                                Avg Gas <span class="sort-icon">↕</span>
-                            </th>
-                            <th class="sortable" data-column="percent">
-                                % of Total Gas <span class="sort-icon">↕</span>
-                            </th>
+                            {{stats_headers}}
                         </tr>
                     </thead>
                     <tbody>
