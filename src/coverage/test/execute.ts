@@ -6,7 +6,7 @@ import type {ContractGetMethodResult} from "@ton/core/dist/contract/ContractProv
 
 export type ExtendedGetResult = ContractGetMethodResult & { vmLogs: string };
 
-export async function executeInstructions(code: runtime.Instr[], id: number = 0, stack?: TupleBuilder): Promise<[TupleReader, string]> {
+export async function executeInstructions(code: runtime.Instr[], id: number = 0, storageCell?: Cell, stack?: TupleBuilder): Promise<[TupleReader, string]> {
     class TestContract implements Contract {
         public readonly address: Address;
         public readonly init?: StateInit;
@@ -42,7 +42,62 @@ export async function executeInstructions(code: runtime.Instr[], id: number = 0,
 
     const init: StateInit = {
         code: runtime.compileCell(code),
-        data: new Cell(),
+        data: storageCell,
+    };
+
+    const address = contractAddress(0, init);
+    const contract = new TestContract(address, init);
+
+    const openContract = blockchain.openContract(contract);
+
+    await openContract.send(
+        treasure.getSender(),
+        {
+            value: toNano("10"),
+        },
+        new Cell(),
+    );
+
+    return openContract.getAny(id);
+}
+
+export async function executeInstructions2(code: Cell, id: number = 0, storageCell?: Cell, stack?: TupleBuilder): Promise<[TupleReader, string]> {
+    class TestContract implements Contract {
+        public readonly address: Address;
+        public readonly init?: StateInit;
+
+        public constructor(address: Address, init?: StateInit) {
+            this.address = address;
+            this.init = init;
+        }
+
+        public async send(
+            provider: ContractProvider,
+            via: Sender,
+            args: { value: bigint; bounce?: boolean | null | undefined },
+            body: Cell,
+        ) {
+            await provider.internal(via, {...args, body: body});
+        }
+
+        public async getAny(
+            provider: ContractProvider,
+            id: number,
+        ): Promise<[TupleReader, string]> {
+            const builder = stack ?? new TupleBuilder();
+            const res = (await provider.get(id, builder.build())) as ExtendedGetResult;
+            return [res.stack, res.vmLogs];
+        }
+    }
+
+    const blockchain: Blockchain = await Blockchain.create();
+    blockchain.verbosity.print = false;
+    blockchain.verbosity.vmLogs = "vm_logs_verbose";
+    const treasure: SandboxContract<TreasuryContract> = await blockchain.treasury("treasure");
+
+    const init: StateInit = {
+        code: code,
+        data: storageCell,
     };
 
     const address = contractAddress(0, init);

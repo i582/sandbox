@@ -1,6 +1,6 @@
 {
   "name": "@ton/sandbox",
-  "version": "0.37.7",
+  "version": "0.37.8",
   "description": "TON transaction emulator",
   "main": "dist/index.js",
   "license": "MIT",
@@ -20,7 +20,7 @@
     "@ton/core": "^0.61.0",
     "@ton/crypto": "3.3.0",
     "@ton/test-utils": "^0.7.0",
-    "@ton/tolk-js": "file:/Users/petrmakhnev/tolk-js/ton-tolk-js-1.0.67.tgz",
+    "@ton/tolk-js": "file:/Users/petrmakhnev/tolk-js/ton-tolk-js-1.0.68.tgz",
     "@ton/ton": "^15.2.1",
     "@ton/toolchain": "the-ton-tech/toolchain#v1.4.0",
     "@types/jest": "^30.0.0",
@@ -64,6 +64,6 @@
     "chalk": "^4.1.2",
     "fflate": "^0.8.2",
     "table": "^6.9.0",
-    "ton-assembly": "/Users/petrmakhnev/tasm-new/ton-assembly-0.2.4-SNAPSHOT.8.tgz"
+    "ton-assembly": "/Users/petrmakhnev/tasm-new/ton-assembly-0.2.4-SNAPSHOT.12.tgz"
   }
 }

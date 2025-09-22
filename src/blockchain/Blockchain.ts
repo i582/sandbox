@@ -13,6 +13,7 @@ import {
     OpenedContract,
 } from '@ton/core';
 import { getSecureRandomBytes } from '@ton/crypto';
+import { SourceMap } from 'ton-assembly/dist/trace';
 
 import { defaultConfig } from '../config/defaultConfig';
 import { IExecutor, Executor, TickOrTock, PrevBlocksInfo } from '../executor/Executor';
@@ -36,12 +37,11 @@ import { testSubwalletId } from '../utils/testTreasurySubwalletId';
 import { collectMetric } from '../metric/collectMetric';
 import { ContractsMeta } from '../meta/ContractsMeta';
 import { deepcopy } from '../utils/deepcopy';
-import {collectAsmCoverage, collectTxsCoverage, mergeCoverages, Coverage, collectTolkCoverage} from '../coverage';
+import { collectAsmCoverage, collectTxsCoverage, mergeCoverages, Coverage, collectTolkCoverage } from '../coverage';
 import { MessageQueueManager } from './MessageQueueManager';
 import { AsyncLock } from '../utils/AsyncLock';
 import { BlockchainSnapshot } from './BlockchainSnapshot';
 import { requireOptional } from '../utils/require';
-import {SourceMap} from "ton-assembly/dist/trace";
 
 const CREATE_WALLETS_PREFIX = 'CREATE_WALLETS';
 
@@ -885,7 +885,9 @@ export class Blockchain {
         }
 
         const txs = this.coverageTransactions.flatMap((tx) => collectTxsCoverage(code, address, tx, sourceMap));
-        const gets = this.coverageGetMethodResults.flatMap((get) => sourceMap ? collectTolkCoverage(code, get.vmLogs, sourceMap) : collectAsmCoverage(code, get.vmLogs));
+        const gets = this.coverageGetMethodResults.flatMap((get) =>
+            sourceMap ? collectTolkCoverage(code, get.vmLogs, sourceMap) : collectAsmCoverage(code, get.vmLogs),
+        );
 
         const coverages = [...txs, ...gets];
         return new Coverage(mergeCoverages(...coverages));

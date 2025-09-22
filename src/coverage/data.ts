@@ -1,6 +1,6 @@
-import type {trace} from "ton-assembly";
-import {Cell} from "@ton/core";
-import {SourceMap} from "ton-assembly/dist/trace";
+import type { trace } from "ton-assembly";
+import { Cell } from "@ton/core";
+import { SourceMap } from "ton-assembly/dist/trace";
 
 export type CoverageData = {
     readonly code: Cell;
@@ -102,78 +102,91 @@ export function buildLineInfo(trace: trace.TraceInfo, asm: string): readonly Lin
     });
 }
 
+type StepWithGas = { step: trace.Step, countGas: boolean };
 export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: SourceMap): {
     lines: Map<string, Line[]>,
     gasPerFunction: Map<string, { gas: number; instructions: number }>,
     executableLines: Map<string, Set<number>>
 } => {
-    const lines = new Map<string, Line[]>()
-    const executableLines = new Map<string, Set<number>>()
+    const lines = new Map<string, Line[]>();
+    const executableLines = new Map<string, Set<number>>();
 
     if (sourceMap?.files) {
-        sourceMap.files.forEach(file => {
+        for (const file of sourceMap.files) {
             if (!file.is_stdlib) { // Skip stdlib files
-                const fileLines = file.content.split("\n")
+                const fileLines = file.content.split("\n");
                 lines.set(file.path, fileLines.map(line => ({
                     line,
-                    info: { $: "Skipped" } as Skipped
-                })))
-                executableLines.set(file.path, new Set())
+                    info: {$: "Skipped"} as Skipped,
+                })));
+                executableLines.set(file.path, new Set());
             }
-        })
+        }
     }
 
-    // Fill executable lines from source map
     sourceMap?.locations.forEach(location => {
-        const fileExecLines = executableLines.get(location.file) || new Set()
-        fileExecLines.add(location.line)
-        executableLines.set(location.file, fileExecLines)
-    })
+        const fileExecLines = executableLines.get(location.file) || new Set();
+        fileExecLines.add(location.line);
+        executableLines.set(location.file, fileExecLines);
+    });
 
-    const perLineSteps: Map<string, Map<number, trace.Step[]>> = new Map()
-    const stepsPerFunction: Map<string, trace.Step[]> = new Map()
+    const perLineSteps: Map<string, Map<number, StepWithGas[]>> = new Map();
+    const stepsPerFunction: Map<string, trace.Step[]> = new Map();
 
     for (const step of trace.steps) {
-        if (step.sourceMapEntries.length === 0) continue
+        if (step.sourceMapEntries.length === 0) continue;
+
+        let stepIsCounted = false;
         for (const entry of step.sourceMapEntries) {
-            const filePath = entry.file
-            const line = (entry.line ?? 0) + (entry.line_offset ?? 0)
+            const filePath = entry.file;
+            const line = (entry.line ?? 0);
 
-            // Initialize file steps map if not exists
             if (!perLineSteps.has(filePath)) {
-                perLineSteps.set(filePath, new Map())
+                perLineSteps.set(filePath, new Map());
             }
-            const fileSteps = perLineSteps.get(filePath)!
+            const fileSteps = perLineSteps.get(filePath)!;
 
-            fileSteps.set(line, [...(fileSteps.get(line) ?? []), step])
+            if (fileSteps.get(line)?.at(-1)?.step !== step) {
+                fileSteps.set(line, [...(fileSteps.get(line) ?? []), {step, countGas: true}]);
+                // stepIsCounted = entry.ast_kind !== "ast_function_declaration";
+            }
 
             if (entry.inlined_to_func !== undefined) {
                 // inlined
-                stepsPerFunction.set(entry.inlined_to_func, [...(stepsPerFunction.get(entry.inlined_to_func) ?? []), step])
-                continue
+                if (stepsPerFunction.get(entry.inlined_to_func)?.at(-1) !== step) {
+                    stepsPerFunction.set(entry.inlined_to_func, [...(stepsPerFunction.get(entry.inlined_to_func) ?? []), step]);
+                }
+                continue;
             }
-            stepsPerFunction.set(entry.func, [...(stepsPerFunction.get(entry.func) ?? []), step])
+            if (stepsPerFunction.get(entry.func)?.at(-1) !== step) {
+                stepsPerFunction.set(entry.func, [...(stepsPerFunction.get(entry.func) ?? []), step]);
+            }
         }
     }
 
     const gasPerFunction = new Map(stepsPerFunction.entries().map(([func, steps]) => {
         const gas = steps.flatMap(step => normalizeGas(step.gasCost)).reduce((acc, gas) => acc + gas, 0);
         const instructions = steps.length;
-        return [func, { gas, instructions }];
+        return [func, {gas, instructions}];
     }));
 
-    const resultLines = new Map<string, Line[]>()
+    const resultLines = new Map<string, Line[]>();
 
     for (const [filePath, fileLines] of lines) {
-        const fileSteps = perLineSteps.get(filePath) || new Map()
-        const fileExecLines = executableLines.get(filePath) || new Set()
+        const fileSteps = perLineSteps.get(filePath) ?? new Map<number, StepWithGas[]>();
+        const fileExecLines = executableLines.get(filePath) ?? new Set();
 
         const processedLines = fileLines.map((lineObj, idx): Line => {
-            const lineNumber = idx + 1
-            const infos = fileSteps.get(lineNumber)
+            const lineNumber = idx + 1;
+            const infos = fileSteps.get(lineNumber);
 
             if (infos) {
-                const gasInfo = infos.flatMap((step: trace.Step) => normalizeGas(step.gasCost)).reduce((acc: number, gas: number) => acc + gas, 0)
+                const gasInfo = infos.flatMap(step => {
+                    if (!step.countGas) {
+                        return []
+                    }
+                    return normalizeGas(step.step.gasCost);
+                }).reduce((acc: number, gas: number) => acc + gas, 0);
 
                 return {
                     line: lineObj.line,
@@ -182,7 +195,7 @@ export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: SourceMap)
                         hits: infos.length,
                         gasCosts: [gasInfo],
                     } as Covered,
-                }
+                };
             }
 
             if (!isExecutableLine(lineObj.line) || !fileExecLines.has(lineNumber)) {
@@ -191,7 +204,7 @@ export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: SourceMap)
                     info: {
                         $: "Skipped",
                     },
-                }
+                };
             }
 
             return {
@@ -199,14 +212,14 @@ export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: SourceMap)
                 info: {
                     $: "Uncovered",
                 },
-            }
-        })
+            };
+        });
 
-        resultLines.set(filePath, processedLines)
+        resultLines.set(filePath, processedLines);
     }
 
-    return {lines: resultLines, gasPerFunction, executableLines}
-}
+    return {lines: resultLines, gasPerFunction, executableLines};
+};
 
 function normalizeGas(gas: number): number {
     if (gas > 10000) {
@@ -355,10 +368,10 @@ export function mergeCoverages(...coverages: readonly CoverageData[]): CoverageD
                 if (existing) {
                     mergedGasPerFunction.set(funcName, {
                         gas: existing.gas + stats.gas,
-                        instructions: existing.instructions + stats.instructions
+                        instructions: existing.instructions + stats.instructions,
                     });
                 } else {
-                    mergedGasPerFunction.set(funcName, { ...stats });
+                    mergedGasPerFunction.set(funcName, {...stats});
                 }
             });
         }

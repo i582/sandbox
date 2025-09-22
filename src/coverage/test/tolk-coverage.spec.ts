@@ -1,31 +1,35 @@
-import {generateTextReport, generateHtmlReport, collectTolkCoverage, mergeCoverages, CoverageData, coverageToJson, coverageFromJson} from "../";
-import {mkdirSync, writeFileSync, existsSync} from "node:fs";
-import {executeInstructions} from "./execute";
-import {collectAsmCoverage} from "../collect";
-import {Cell, TupleBuilder} from "@ton/core";
-import {decompileCell} from "ton-assembly/dist/runtime";
-import {runTolkCompiler, TolkSourceMap} from "@ton/tolk-js";
-import {recompileCell} from "ton-assembly/dist/coverage";
+import {
+    generateTextReport,
+    generateHtmlReport,
+    collectTolkCoverage,
+} from "../";
+import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { executeInstructions, executeInstructions2 } from "./execute";
+import { collectAsmCoverage } from "../collect";
+import { beginCell, Cell, TupleBuilder } from "@ton/core";
+import { decompileCell } from "ton-assembly/dist/runtime";
+import { runTolkCompiler, TolkSourceMap } from "@ton/tolk-js";
 
 describe("tolk coverage", () => {
     const test =
-        (code: string, otherCode: string, id: number = 0) =>
+        (code: string, otherCode: string = "", storageCell: Cell = new Cell(), id: number = 0) =>
             async () => {
                 const name = expect.getState().currentTestName;
 
-                const [tolkCompiled, sourceMap] = await compile(code, otherCode);
+                const [tolkCompiled, cleanCell, sourceMap] = await compile(code, otherCode);
                 const tolkInstructions = decompileCell(tolkCompiled);
 
-                const cell = tolkCompiled
+                const builder = new TupleBuilder();
+                builder.writeNumber(10);
+                builder.writeNumber(20);
+                const [_, logs] = await executeInstructions(tolkInstructions, id, storageCell, builder);
+                const coverage = collectTolkCoverage(tolkCompiled, logs, sourceMap?.sourceMap);
 
-                const builder = new TupleBuilder()
-                builder.writeNumber(10)
-                builder.writeNumber(20)
-                const [_, logs] = await executeInstructions(tolkInstructions, id, builder);
-                const coverage = collectTolkCoverage(cell, logs, sourceMap?.sourcemap);
-                const coverage2 = collectAsmCoverage(recompileCell(cell, false)[0], logs);
+                const cleanInstructions = decompileCell(cleanCell);
+                const [_1, logs2] = await executeInstructions2(cleanCell, id, storageCell, builder);
+                const coverage2 = collectAsmCoverage(cleanCell, logs2);
 
-                console.log(coverage.gasPerFunction)
+                console.log(coverage.gasPerFunction);
 
                 const report = generateTextReport(coverage);
                 expect(report).toMatchSnapshot();
@@ -85,65 +89,135 @@ fun doSomething(a: int, b: int) {
         ),
     );
 
-    it("merge coverage", () => {
-        // Create two simple coverage objects for testing merge
-        const coverage1: CoverageData = {
-            code: new Cell(),
-            lines: new Map([
-                ["test1.tolk", [
-                    { line: "line 1", info: { $: "Covered", hits: 1, gasCosts: [10] } },
-                    { line: "line 2", info: { $: "Uncovered" } }
-                ]]
-            ]),
-            gasPerFunction: new Map([
-                ["func1", { gas: 100, instructions: 5 }]
-            ]),
-            executableLines: new Map([
-                ["test1.tolk", new Set([1, 2])]
-            ])
-        };
+    it(
+        "return after lazy",
+        test(
+            `
+struct VaultStorage {
+    totalAssets: int32
+}
+fun VaultStorage.load() { return VaultStorage.fromCell(contract.getData()) }
+struct VaultConfig {}
 
-        const coverage2: CoverageData = {
-            code: new Cell(),
-            lines: new Map([
-                ["test1.tolk", [
-                    { line: "line 1", info: { $: "Covered", hits: 2, gasCosts: [15] } },
-                    { line: "line 2", info: { $: "Covered", hits: 1, gasCosts: [20] } }
-                ]],
-                ["test2.tolk", [
-                    { line: "line A", info: { $: "Covered", hits: 3, gasCosts: [30] } }
-                ]]
-            ]),
-            gasPerFunction: new Map([
-                ["func1", { gas: 50, instructions: 3 }],
-                ["func2", { gas: 75, instructions: 4 }]
-            ]),
-            executableLines: new Map([
-                ["test1.tolk", new Set([1, 2])],
-                ["test2.tolk", new Set([1])]
-            ])
-        };
+fun totalAssets(vaultConfig: VaultConfig? = null) {
+    var storage = lazy VaultStorage.load();
+    return storage.totalAssets;
+}
 
-        const merged = mergeCoverages(coverage1, coverage2);
+fun main() {
+    return totalAssets(null);
+}
+            `,
+            "",
+            beginCell().storeInt(999, 32).endCell(),
+        ),
+    );
 
-        // Check merged lines
-        expect(merged.lines.size).toBe(2); // test1.tolk and test2.tolk
-        expect(merged.lines.get("test1.tolk")).toBeDefined();
-        expect(merged.lines.get("test2.tolk")).toBeDefined();
+    it(
+        "match over union type with subsequent implicit RET",
+        test(
+            `
+type ExtraCurrencyId = uint32;
+            
+struct (0x0) TonAsset {}
 
-        // Check merged gasPerFunction
-        expect(merged.gasPerFunction?.size).toBe(2);
-        expect(merged.gasPerFunction?.get("func1")).toEqual({ gas: 150, instructions: 8 });
-        expect(merged.gasPerFunction?.get("func2")).toEqual({ gas: 75, instructions: 4 });
+struct (0x1) JettonAsset {
+    jettonMaster: address;
+}
 
-        // Check merged executableLines
-        expect(merged.executableLines?.size).toBe(2);
-        expect(merged.executableLines?.get("test1.tolk")?.size).toBe(2);
-        expect(merged.executableLines?.get("test2.tolk")?.size).toBe(1);
-    });
+struct (0x2) ExtraCurrencyAsset {
+    extraCurrencyId: ExtraCurrencyId;
+}
+
+type Asset = TonAsset | JettonAsset | ExtraCurrencyAsset;
+
+struct TransferParams {
+    asset: Asset;
+}
+
+@inline_ref
+fun processTonAsset(asset: TonAsset) {
+    return 1;
+}
+
+fun transferAsset(transferParams: TransferParams) {
+    var res = 0;
+
+    match (transferParams.asset) {
+        TonAsset => {
+            res = processTonAsset(transferParams.asset);
+        }
+        JettonAsset => {
+        }
+        ExtraCurrencyAsset => {
+        }
+    }
+    
+    return res
+}
+
+fun main() {
+    return transferAsset({ asset: TonAsset {} });
+}
+            `,
+            "",
+            beginCell().storeInt(999, 32).endCell(),
+        ),
+    );
+
+    it(
+        "match over integers",
+        test(
+            `
+type RoundingType = uint2;
+
+const ROUND_DOWN = 0;
+const ROUND_UP = 1;
+const ROUND_HALF_UP = 2;
+
+@pure
+fun RoundingType.Down() {
+    return ROUND_DOWN;
+}
+
+@pure
+fun RoundingType.Up() {
+    return ROUND_UP;
+}
+
+@pure
+fun RoundingType.HalfUp() {
+    return ROUND_HALF_UP;
+}
+
+fun roundedMulDiv(x: int, y: int, z: int, rounding: RoundingType) {
+    match (rounding) {
+        ROUND_DOWN => {
+            return mulDivFloor(x, y, z);
+        }
+        ROUND_UP => {
+            return mulDivCeil(x, y, z);
+        }
+        ROUND_HALF_UP => {
+            return mulDivRound(x, y, z);
+        }
+        else => {
+            throw 0xFFF;
+        }
+    }
+}
+
+fun main() {
+    return roundedMulDiv(1, 2, 3, ROUND_DOWN);
+}
+            `,
+            "",
+            beginCell().storeInt(999, 32).endCell(),
+        ),
+    );
 });
 
-const compile = async (code: string, other: string): Promise<[Cell, TolkSourceMap | undefined]> => {
+const compile = async (code: string, other: string): Promise<[Cell, Cell, TolkSourceMap | undefined]> => {
     const result = await runTolkCompiler({
         entrypointFileName: "main.tolk",
         fsReadCallback: (name) => {
@@ -154,11 +228,15 @@ const compile = async (code: string, other: string): Promise<[Cell, TolkSourceMa
         },
         withStackComments: true,
         withSrcLineComments: true,
-        generateSourceMap: true,
-    })
+        collectSourceMap: true,
+    });
     if (result.status === "error") {
-        throw new Error(result.message)
+        throw new Error(result.message);
     }
 
-    return [Cell.fromBase64(result.debugCodeBoc64 ?? result.codeBoc64), result.sourceMap];
+    return [
+        Cell.fromBase64(result.sourceMapCodeBoc64 ?? result.codeBoc64),
+        Cell.fromBase64(result.codeBoc64),
+        result.sourceMap
+    ];
 };
