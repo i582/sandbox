@@ -13,7 +13,7 @@ import {
     OpenedContract,
 } from '@ton/core';
 import { getSecureRandomBytes } from '@ton/crypto';
-import { SourceMap } from 'ton-assembly/dist/trace';
+import { SourceMap } from 'ton-source-map';
 
 import { defaultConfig } from '../config/defaultConfig';
 import { IExecutor, Executor, TickOrTock, PrevBlocksInfo } from '../executor/Executor';
@@ -886,7 +886,7 @@ export class Blockchain {
 
         const txs = this.coverageTransactions.flatMap((tx) => collectTxsCoverage(code, address, tx, sourceMap));
         const gets = this.coverageGetMethodResults.flatMap((get) =>
-            sourceMap ? collectTolkCoverage(code, get.vmLogs, sourceMap) : collectAsmCoverage(code, get.vmLogs),
+            sourceMap ? collectTolkCoverage(get.vmLogs, sourceMap) : collectAsmCoverage(code, get.vmLogs),
         );
 
         const coverages = [...txs, ...gets];

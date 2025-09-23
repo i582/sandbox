@@ -2,7 +2,7 @@ import {Address, beginCell, Cell} from "@ton/core";
 import {BlockchainTransaction} from "../blockchain/Blockchain";
 import {buildLineInfo, buildTolkLineInfo, CoverageData, Line} from "./data";
 import {runtime, text, trace} from "ton-assembly";
-import {SourceMap} from "ton-assembly/dist/trace";
+import { SourceMap } from "ton-source-map";
 
 export function collectAsmCoverage(cell: Cell, logs: string): CoverageData {
     const [cleanCell, mapping] = recompileCell(cell);
@@ -22,17 +22,12 @@ export function collectAsmCoverage(cell: Cell, logs: string): CoverageData {
     };
 }
 
-export function collectTolkCoverage(cell: Cell, logs: string, sourceMap?: SourceMap): CoverageData {
-    const codeCell = sourceMap?.debugCode64 ? Cell.fromBase64(sourceMap.debugCode64) : cell
-    const instructionsWithoutPositions = runtime.decompileCell(codeCell);
-    const [,mapping] = runtime.compileCellWithMapping(instructionsWithoutPositions);
-    const info = trace.createMappingInfo(mapping);
-
-    const traceInfos = trace.createTraceInfoPerTransaction(logs, info, sourceMap);
+export function collectTolkCoverage(logs: string, sourceMap: SourceMap): CoverageData {
+    const traceInfos = trace.createTraceInfoPerTransaction(logs, sourceMap.assemblyMapping, sourceMap.highlevelMapping);
     const combinedTrace = {steps: traceInfos.flatMap(trace => trace.steps)};
-    const {lines: combinedLines, gasPerFunction, executableLines} = buildTolkLineInfo(combinedTrace, sourceMap);
+    const {lines: combinedLines, gasPerFunction, executableLines} = buildTolkLineInfo(combinedTrace, sourceMap.highlevelMapping);
     return {
-        code: codeCell,
+        code: Cell.fromBase64(sourceMap.recompiledCode),
         lines: combinedLines,
         gasPerFunction,
         executableLines,
@@ -62,7 +57,7 @@ export function collectTxsCoverage(code: Cell, address: Address | undefined, tra
         }
 
         if (sourceMap !== undefined) {
-            results.push(collectTolkCoverage(code, transaction.vmLogs, sourceMap));
+            results.push(collectTolkCoverage(transaction.vmLogs, sourceMap));
             continue;
         }
 

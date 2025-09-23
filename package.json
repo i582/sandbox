@@ -31,7 +31,7 @@
     "jest-environment-node": "^30.0.5",
     "ts-jest": "^29.4.1",
     "ts-node": "^10.9.1",
-    "typescript": "^5.8.3"
+    "typescript": "^5.9.2"
   },
   "peerDependencies": {
     "@ton-community/func-js": ">=0.10.0",
@@ -64,6 +64,7 @@
     "chalk": "^4.1.2",
     "fflate": "^0.8.2",
     "table": "^6.9.0",
-    "ton-assembly": "/Users/petrmakhnev/tasm-new/ton-assembly-0.2.4-SNAPSHOT.12.tgz"
+    "ton-assembly": "/Users/petrmakhnev/tasm-new/ton-assembly-0.3.3.tgz",
+    "ton-source-map": "^0.2.1"
   }
 }

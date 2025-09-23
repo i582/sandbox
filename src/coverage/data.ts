@@ -1,6 +1,6 @@
 import type { trace } from "ton-assembly";
 import { Cell } from "@ton/core";
-import { SourceMap } from "ton-assembly/dist/trace";
+import { HighLevelMapping } from "ton-source-map";
 
 export type CoverageData = {
     readonly code: Cell;
@@ -103,7 +103,7 @@ export function buildLineInfo(trace: trace.TraceInfo, asm: string): readonly Lin
 }
 
 type StepWithGas = { step: trace.Step, countGas: boolean };
-export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: SourceMap): {
+export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: HighLevelMapping): {
     lines: Map<string, Line[]>,
     gasPerFunction: Map<string, { gas: number; instructions: number }>,
     executableLines: Map<string, Set<number>>
@@ -125,21 +125,23 @@ export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: SourceMap)
     }
 
     sourceMap?.locations.forEach(location => {
-        const fileExecLines = executableLines.get(location.file) || new Set();
-        fileExecLines.add(location.line);
-        executableLines.set(location.file, fileExecLines);
+        const fileExecLines = executableLines.get(location.loc.file) ?? new Set();
+        fileExecLines.add(location.loc.line);
+        executableLines.set(location.loc.file, fileExecLines);
     });
 
     const perLineSteps: Map<string, Map<number, StepWithGas[]>> = new Map();
     const stepsPerFunction: Map<string, trace.Step[]> = new Map();
 
     for (const step of trace.steps) {
-        if (step.sourceMapEntries.length === 0) continue;
+        if (step.sourceMapEntries.length === 0) {
+            continue;
+        }
 
         let stepIsCounted = false;
         for (const entry of step.sourceMapEntries) {
-            const filePath = entry.file;
-            const line = (entry.line ?? 0);
+            const filePath = entry.loc.file;
+            const line = (entry.loc.line ?? 0);
 
             if (!perLineSteps.has(filePath)) {
                 perLineSteps.set(filePath, new Map());
@@ -151,15 +153,17 @@ export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: SourceMap)
                 // stepIsCounted = entry.ast_kind !== "ast_function_declaration";
             }
 
-            if (entry.inlined_to_func !== undefined) {
+            const inlinedTo = entry.context.inlining.inlined_to_func;
+            if (inlinedTo !== undefined) {
                 // inlined
-                if (stepsPerFunction.get(entry.inlined_to_func)?.at(-1) !== step) {
-                    stepsPerFunction.set(entry.inlined_to_func, [...(stepsPerFunction.get(entry.inlined_to_func) ?? []), step]);
+                if (stepsPerFunction.get(inlinedTo)?.at(-1) !== step) {
+                    stepsPerFunction.set(inlinedTo, [...(stepsPerFunction.get(inlinedTo) ?? []), step]);
                 }
                 continue;
             }
-            if (stepsPerFunction.get(entry.func)?.at(-1) !== step) {
-                stepsPerFunction.set(entry.func, [...(stepsPerFunction.get(entry.func) ?? []), step]);
+            const containingFunction = entry.context.containing_function;
+            if (stepsPerFunction.get(containingFunction)?.at(-1) !== step) {
+                stepsPerFunction.set(containingFunction, [...(stepsPerFunction.get(containingFunction) ?? []), step]);
             }
         }
     }
@@ -176,8 +180,7 @@ export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: SourceMap)
         const fileSteps = perLineSteps.get(filePath) ?? new Map<number, StepWithGas[]>();
         const fileExecLines = executableLines.get(filePath) ?? new Set();
 
-        const processedLines = fileLines.map((lineObj, idx): Line => {
-            const lineNumber = idx + 1;
+        const processedLines = fileLines.map((lineObj, lineNumber): Line => {
             const infos = fileSteps.get(lineNumber);
 
             if (infos) {
@@ -246,8 +249,7 @@ export function generateCoverageSummary(coverage: CoverageData): CoverageSummary
     for (const [filePath, fileLines] of coverage.lines) {
         const fileExecLines = coverage.executableLines?.get(filePath) || new Set();
 
-        fileLines.forEach((line, index) => {
-            const lineNumber = index + 1;
+        fileLines.forEach((line, lineNumber) => {
             const isLineExecutable = coverage.executableLines
                 ? fileExecLines.has(lineNumber)
                 : isExecutableLine(line.line);

@@ -8,7 +8,8 @@ import { executeInstructions, executeInstructions2 } from "./execute";
 import { collectAsmCoverage } from "../collect";
 import { beginCell, Cell, TupleBuilder } from "@ton/core";
 import { decompileCell } from "ton-assembly/dist/runtime";
-import { runTolkCompiler, TolkSourceMap } from "@ton/tolk-js";
+import { runTolkCompiler } from "@ton/tolk-js";
+import { SourceMap } from "ton-source-map";
 
 describe("tolk coverage", () => {
     const test =
@@ -17,15 +18,14 @@ describe("tolk coverage", () => {
                 const name = expect.getState().currentTestName;
 
                 const [tolkCompiled, cleanCell, sourceMap] = await compile(code, otherCode);
-                const tolkInstructions = decompileCell(tolkCompiled);
+                const tolkInstructions = decompileCell(cleanCell);
 
                 const builder = new TupleBuilder();
                 builder.writeNumber(10);
                 builder.writeNumber(20);
-                const [_, logs] = await executeInstructions(tolkInstructions, id, storageCell, builder);
-                const coverage = collectTolkCoverage(tolkCompiled, logs, sourceMap?.sourceMap);
+                const [_, logs] = await executeInstructions(tolkInstructions, id, storageCell, builder, sourceMap);
+                const coverage = collectTolkCoverage(logs, sourceMap!);
 
-                const cleanInstructions = decompileCell(cleanCell);
                 const [_1, logs2] = await executeInstructions2(cleanCell, id, storageCell, builder);
                 const coverage2 = collectAsmCoverage(cleanCell, logs2);
 
@@ -217,7 +217,7 @@ fun main() {
     );
 });
 
-const compile = async (code: string, other: string): Promise<[Cell, Cell, TolkSourceMap | undefined]> => {
+const compile = async (code: string, other: string): Promise<[Cell, Cell, SourceMap | undefined]> => {
     const result = await runTolkCompiler({
         entrypointFileName: "main.tolk",
         fsReadCallback: (name) => {
@@ -236,7 +236,7 @@ const compile = async (code: string, other: string): Promise<[Cell, Cell, TolkSo
 
     return [
         Cell.fromBase64(result.sourceMapCodeBoc64 ?? result.codeBoc64),
-        Cell.fromBase64(result.codeBoc64),
+        Cell.fromBase64(result.sourceMapCodeRecompiledBoc64 ?? result.codeBoc64),
         result.sourceMap
     ];
 };
