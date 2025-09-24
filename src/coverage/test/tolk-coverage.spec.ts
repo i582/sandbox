@@ -1,6 +1,7 @@
 import {
     generateTextReport,
     generateHtmlReport,
+    generateTolkHtmlReport,
     collectTolkCoverage,
 } from "../";
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
@@ -29,7 +30,7 @@ describe("tolk coverage", () => {
                 const [_1, logs2] = await executeInstructions2(cleanCell, id, storageCell, builder);
                 const coverage2 = collectAsmCoverage(cleanCell, logs2);
 
-                console.log(coverage.gasPerFunction);
+                // console.log(coverage.gasPerFunction);
 
                 const report = generateTextReport(coverage);
                 expect(report).toMatchSnapshot();
@@ -43,6 +44,26 @@ describe("tolk coverage", () => {
                 writeFileSync(`${__dirname}/output/${name}.html`, htmlReport);
                 const htmlReport2 = generateHtmlReport(coverage2);
                 writeFileSync(`${__dirname}/output/${name}-asm.html`, htmlReport2);
+
+                const tolkHtmlReport = generateTolkHtmlReport(coverage);
+                const tolkOutDir = `${__dirname}/output/${name}-tolk`;
+                if (!existsSync(tolkOutDir)) {
+                    mkdirSync(tolkOutDir, { recursive: true });
+                }
+
+                writeFileSync(`${tolkOutDir}/index.html`, tolkHtmlReport.index);
+
+                for (const [folderPath, folderHtml] of tolkHtmlReport.folders) {
+                    const folderDir = folderPath === '/' ? `${tolkOutDir}/root` : `${tolkOutDir}/${folderPath}`;
+                    if (!existsSync(folderDir)) {
+                        mkdirSync(folderDir, { recursive: true });
+                    }
+                    writeFileSync(`${folderDir}/index.html`, folderHtml);
+                }
+
+                for (const [filePath, fileHtml] of tolkHtmlReport.files) {
+                    writeFileSync(`${tolkOutDir}/${filePath}.html`, fileHtml);
+                }
             };
 
     it(
@@ -59,14 +80,25 @@ fun Foo.create(x: int): Foo {
     return Foo { x: x + 10 };
 }
 
+@noinline
+fun Foo.unused(x: int): int {
+    if (x > 10) {
+        return 100;
+    }
+    return x * 2;
+}
+
 fun main(foo: int, bar: int) {
-    if (
-        foo > 10 && 
-        bar > 100
-    ) {
+    if (foo > 10 && bar > 100) {
         foo = 20;
         return;
     }
+    
+    val a = foo == 10 
+        ? foo + 20 
+        : foo + 30;
+    
+    assert (a > 0) throw 10;
     
     // comment here
     /*
@@ -86,6 +118,20 @@ fun doSomething(a: int, b: int) {
     return a + b;
 }
             `,
+        ),
+    );
+
+    it(
+        "assert",
+        test(
+            `
+fun main(foo: int, bar: int) {
+    assert (foo >= 10) 
+        throw 0xFFF;
+    throw foo - 10;
+}
+            `,
+            ``,
         ),
     );
 

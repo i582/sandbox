@@ -1,19 +1,24 @@
-import {runtime} from "ton-assembly/";
+import {runtime} from "ton-assembly";
 import type {Address, Contract, ContractProvider, Sender, StateInit, TupleReader} from "@ton/core";
 import {Cell, contractAddress, toNano, TupleBuilder} from "@ton/core";
 import {SandboxContract, TreasuryContract, Blockchain} from "../../";
 import type {ContractGetMethodResult} from "@ton/core/dist/contract/ContractProvider";
+import { SourceMapContract } from "../../blockchain/SmartContract";
+import { SourceMap } from "ton-source-map";
 
 export type ExtendedGetResult = ContractGetMethodResult & { vmLogs: string };
 
-export async function executeInstructions(code: runtime.Instr[], id: number = 0, storageCell?: Cell, stack?: TupleBuilder): Promise<[TupleReader, string]> {
-    class TestContract implements Contract {
+export async function executeInstructions(code: runtime.Instr[], id: number = 0, storageCell?: Cell, stack?: TupleBuilder, sourceMap?: SourceMap): Promise<[TupleReader, string]> {
+    class TestContract extends SourceMapContract {
         public readonly address: Address;
         public readonly init?: StateInit;
+        public readonly sourceMap?: SourceMap;
 
-        public constructor(address: Address, init?: StateInit) {
+        public constructor(address: Address, init?: StateInit, sourceMap?: SourceMap) {
+            super()
             this.address = address;
             this.init = init;
+            this.sourceMap = sourceMap;
         }
 
         public async send(
@@ -42,11 +47,11 @@ export async function executeInstructions(code: runtime.Instr[], id: number = 0,
 
     const init: StateInit = {
         code: runtime.compileCell(code),
-        data: storageCell,
+        data: storageCell ?? new Cell(),
     };
 
     const address = contractAddress(0, init);
-    const contract = new TestContract(address, init);
+    const contract = new TestContract(address, init, sourceMap);
 
     const openContract = blockchain.openContract(contract);
 

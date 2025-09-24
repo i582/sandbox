@@ -29,6 +29,7 @@ import {
     MessageParams,
     SmartContract,
     SmartContractTransaction,
+    SourceMapContract,
     Verbosity,
 } from './SmartContract';
 import { internal } from '../utils/message';
@@ -204,6 +205,8 @@ export class Blockchain {
     protected collectCoverage: boolean = false;
     protected readonly coverageTransactions: BlockchainTransaction[][] = [];
     protected readonly coverageGetMethodResults: GetMethodResult[] = [];
+
+    public sourceMaps: Map<string, SourceMap | undefined> = new Map();
 
     readonly executor: IExecutor;
 
@@ -679,6 +682,10 @@ export class Blockchain {
         }
 
         this.meta?.upsert(address, { wrapperName: contract?.constructor?.name, abi: contract.abi });
+
+        if (contract instanceof SourceMapContract) {
+            this.sourceMaps.set(address.toString(), (contract as SourceMapContract).sourceMap);
+        }
 
         const provider = this.provider(address, init);
 

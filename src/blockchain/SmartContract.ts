@@ -3,6 +3,8 @@ import {
     Address,
     beginCell,
     Cell,
+    Contract,
+    ContractABI,
     contractAddress,
     Dictionary,
     loadOutList,
@@ -12,12 +14,16 @@ import {
     OutAction,
     parseTuple,
     ShardAccount,
+    StateInit,
     storeMessage,
     storeShardAccount,
     Transaction,
     TupleItem,
     TupleReader,
 } from '@ton/core';
+import { logs } from 'ton-assembly';
+import { Maybe } from '@ton/core/dist/utils/maybe';
+import { findInstructionInfo, SourceMap } from 'ton-source-map';
 
 import { Blockchain } from './Blockchain';
 import { ExtraCurrency, extractEc, packEc } from '../utils/ec';
@@ -33,6 +39,13 @@ import {
 } from '../executor/Executor';
 import { deepcopy } from '../utils/deepcopy';
 import { getDebugContext } from '../debugger';
+
+export abstract class SourceMapContract implements Contract {
+    address!: Address;
+    init?: Maybe<StateInit>;
+    abi?: Maybe<ContractABI>;
+    public readonly sourceMap?: SourceMap;
+}
 
 export function createShardAccount(args: {
     address?: Address;
@@ -154,8 +167,11 @@ export class GetMethodError extends Error {
         public blockchainLogs: string,
         public vmLogs: string,
         public debugLogs: string,
+        public location?: string,
+        public assertion?: string,
     ) {
-        super(`Unable to execute get method. Got exit_code: ${exitCode}`);
+        const message = assertion ? `Assertion \`${assertion}\` failed.` : 'Unable to execute get method.';
+        super(`${message} Got exit_code: ${exitCode}` + (location ? ` at ${location}` : ''));
     }
 }
 
@@ -475,6 +491,42 @@ export class SmartContract {
         }
 
         if (res.output.vm_exit_code !== 0 && res.output.vm_exit_code !== 1) {
+            const lines = logs.parse(res.output.vm_log);
+            const loc = lines.findLast((line) => {
+                return line.$ === 'VmLoc';
+            });
+
+            if (loc) {
+                const sourceMap = this.blockchain.sourceMaps.get(this.address.toString())!;
+
+                const found = findInstructionInfo(sourceMap.assemblyMapping, loc.hash.toLowerCase(), loc.offset - 16);
+                if (found) {
+                    const [instructions, index] = found;
+                    const instr = instructions[index === -1 ? 0 : index];
+                    for (const section of instr.debugSections) {
+                        const loc = sourceMap.highlevelMapping.locations.find((loc) => loc.idx === section);
+                        if (
+                            loc &&
+                            loc.context.description.ast_kind === 'ast_function_call' &&
+                            loc.context.description.is_assert_throw === true
+                        ) {
+                            const locString = './' + loc.loc.file + ':' + (loc.loc.line + 2);
+                            const assertion = loc.context.description.condition as string;
+
+                            throw new GetMethodError(
+                                res.output.vm_exit_code,
+                                BigInt(res.output.gas_used),
+                                res.logs,
+                                res.output.vm_log,
+                                res.debugLogs,
+                                locString,
+                                assertion,
+                            );
+                        }
+                    }
+                }
+            }
+
             throw new GetMethodError(
                 res.output.vm_exit_code,
                 BigInt(res.output.gas_used),

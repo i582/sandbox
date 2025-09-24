@@ -1372,7 +1372,7 @@ __metadata:
     "@ton/core": "npm:^0.61.0"
     "@ton/crypto": "npm:3.3.0"
     "@ton/test-utils": "npm:^0.7.0"
-    "@ton/tolk-js": "file:/Users/petrmakhnev/tolk-js/ton-tolk-js-1.1.8.tgz"
+    "@ton/tolk-js": "file:/Users/petrmakhnev/tolk-js/ton-tolk-js-1.1.9.tgz"
     "@ton/ton": "npm:^15.2.1"
     "@ton/toolchain": "the-ton-tech/toolchain#v1.4.0"
     "@types/jest": "npm:^30.0.0"
@@ -1385,8 +1385,8 @@ __metadata:
     jest-config: "npm:^30.0.5"
     jest-environment-node: "npm:^30.0.5"
     table: "npm:^6.9.0"
-    ton-assembly: /Users/petrmakhnev/tasm-new/ton-assembly-0.3.3.tgz
-    ton-source-map: "npm:^0.2.1"
+    ton-assembly: /Users/petrmakhnev/tasm-new/ton-assembly-0.3.4.tgz
+    ton-source-map: "npm:^0.2.2"
     ts-jest: "npm:^29.4.1"
     ts-node: "npm:^10.9.1"
     typescript: "npm:^5.9.2"
@@ -1422,16 +1422,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@ton/tolk-js@file:/Users/petrmakhnev/tolk-js/ton-tolk-js-1.1.8.tgz::locator=%40ton%2Fsandbox%40workspace%3A.":
-  version: 1.1.8
-  resolution: "@ton/tolk-js@file:/Users/petrmakhnev/tolk-js/ton-tolk-js-1.1.8.tgz#/Users/petrmakhnev/tolk-js/ton-tolk-js-1.1.8.tgz::hash=318937&locator=%40ton%2Fsandbox%40workspace%3A."
+"@ton/tolk-js@file:/Users/petrmakhnev/tolk-js/ton-tolk-js-1.1.9.tgz::locator=%40ton%2Fsandbox%40workspace%3A.":
+  version: 1.1.9
+  resolution: "@ton/tolk-js@file:/Users/petrmakhnev/tolk-js/ton-tolk-js-1.1.9.tgz#/Users/petrmakhnev/tolk-js/ton-tolk-js-1.1.9.tgz::hash=585d57&locator=%40ton%2Fsandbox%40workspace%3A."
   dependencies:
     arg: "npm:^5.0.2"
     ton-assembly: "npm:0.3.1"
-    ton-source-map: "npm:0.2.1"
+    ton-source-map: "npm:0.2.2"
   bin:
     tolk-js: ./dist/cli.js
-  checksum: 10/b8399185a54b0b3f29ed7eadea0b7e3f555462c2905d4cfdefa92cbd48f4434d6ac2cd09aebb56b7fc9c50a7c868e481d773435cb7e220678ad49e5f4f496acb
+  checksum: 10/2e9d0832cee579fae2d7e8fb35e84aab0ef06e350bcc02f63c12b44b2efd23da5e144bd5fcdd72189294b9ec2736c9116b64f57ec7ce344105a268ba5bdd8570
   languageName: node
   linkType: hard
 
@@ -6298,9 +6298,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ton-assembly@file:/Users/petrmakhnev/tasm-new/ton-assembly-0.3.3.tgz::locator=%40ton%2Fsandbox%40workspace%3A.":
-  version: 0.3.3
-  resolution: "ton-assembly@file:/Users/petrmakhnev/tasm-new/ton-assembly-0.3.3.tgz#/Users/petrmakhnev/tasm-new/ton-assembly-0.3.3.tgz::hash=e63ace&locator=%40ton%2Fsandbox%40workspace%3A."
+"ton-assembly@file:/Users/petrmakhnev/tasm-new/ton-assembly-0.3.4.tgz::locator=%40ton%2Fsandbox%40workspace%3A.":
+  version: 0.3.4
+  resolution: "ton-assembly@file:/Users/petrmakhnev/tasm-new/ton-assembly-0.3.4.tgz#/Users/petrmakhnev/tasm-new/ton-assembly-0.3.4.tgz::hash=7e4c1e&locator=%40ton%2Fsandbox%40workspace%3A."
   dependencies:
     "@tonstudio/parser-runtime": "npm:^0.0.1"
     cac: "npm:^6.7.14"
@@ -6314,7 +6314,7 @@ __metadata:
     tasm: ./dist/cli/assembler.js
     tdisasm: ./dist/cli/disassembler.js
     tfift: ./dist/cli/fift-compiler.js
-  checksum: 10/0cd96a7fa59757f561ba0930e8263ea9044a8d6620153c9b6fa17ecda9ab40c70a4a30e9f42499823b6394879280c1d6ed87121e6479e2154eea14faae682df6
+  checksum: 10/2edd9a5591f7ea6055efde81e35ccca56b991c10b5898e726cd0e8fbab19daba6ca4f02d9f119bf4532ef9d92dbdfea0d3e61c72d414dca2b698d5526705c502
   languageName: node
   linkType: hard
 
@@ -6337,7 +6337,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ton-source-map@npm:0.2.1, ton-source-map@npm:^0.2.1":
+"ton-source-map@npm:0.2.2, ton-source-map@npm:^0.2.2":
+  version: 0.2.2
+  resolution: "ton-source-map@npm:0.2.2"
+  checksum: 10/922995ca98a36912ccb611ffcca08e1a35e76e2f334aae9f22e13f0e9ff8cd2f83f0c75468350c98d27295fa124b9c5b5673fbc1b448a3e4d4aad78c98918324
+  languageName: node
+  linkType: hard
+
+"ton-source-map@npm:^0.2.1":
   version: 0.2.1
   resolution: "ton-source-map@npm:0.2.1"
   checksum: 10/ef0e92af57e2106afb7bc1b2376f4e6089f6c01a72f82c24bdd2d84afdd044dd60c61700a8972fdde13fe13d23c3557a5d38ec93c0d4b10f5d69264307da0153

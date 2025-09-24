@@ -18,14 +18,22 @@ export type Covered = {
     readonly $: "Covered"
     readonly hits: number
     readonly gasCosts: readonly number[]
+    readonly instructions?: readonly InstructionCoverage[]
 }
 
 export type Uncovered = {
     readonly $: "Uncovered"
+    readonly instructions?: readonly InstructionCoverage[]
 }
 
 export type Skipped = {
     readonly $: "Skipped"
+}
+
+export type InstructionCoverage = {
+    readonly column: number
+    readonly length: number
+    readonly executed: boolean
 }
 
 export type InstructionStat = {
@@ -131,9 +139,13 @@ export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: HighLevelM
     });
 
     const perLineSteps: Map<string, Map<number, StepWithGas[]>> = new Map();
+    const perLineInstructions: Map<string, Map<number, InstructionCoverage[]>> = new Map();
     const stepsPerFunction: Map<string, trace.Step[]> = new Map();
+    const executedSteps = new Set<trace.Step>();
 
     for (const step of trace.steps) {
+        executedSteps.add(step);
+        
         if (step.sourceMapEntries.length === 0) {
             continue;
         }
@@ -168,6 +180,43 @@ export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: HighLevelM
         }
     }
 
+    sourceMap?.locations.forEach(location => {
+        const filePath = location.loc.file;
+        const line = location.loc.line;
+        const column = location.loc.column;
+        const length = location.loc.length;
+
+        if (!perLineInstructions.has(filePath)) {
+            perLineInstructions.set(filePath, new Map());
+        }
+        const fileInstructions = perLineInstructions.get(filePath)!;
+
+        let executed = false;
+        for (const step of trace.steps) {
+            for (const entry of step.sourceMapEntries) {
+                if (entry.loc.file === filePath && 
+                    entry.loc.line === line && 
+                    entry.loc.column === column && 
+                    entry.loc.length === length) {
+                    executed = true;
+                    break;
+                }
+            }
+            if (executed) break;
+        }
+
+        const instruction: InstructionCoverage = {
+            column,
+            length,
+            executed
+        };
+
+        const lineInstructions = fileInstructions.get(line) ?? [];
+        if (!lineInstructions.some(inst => inst.column === column && inst.length === length)) {
+            fileInstructions.set(line, [...lineInstructions, instruction]);
+        }
+    });
+
     const gasPerFunction = new Map(stepsPerFunction.entries().map(([func, steps]) => {
         const gas = steps.flatMap(step => normalizeGas(step.gasCost)).reduce((acc, gas) => acc + gas, 0);
         const instructions = steps.length;
@@ -178,25 +227,28 @@ export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: HighLevelM
 
     for (const [filePath, fileLines] of lines) {
         const fileSteps = perLineSteps.get(filePath) ?? new Map<number, StepWithGas[]>();
+        const fileInstructions = perLineInstructions.get(filePath) ?? new Map<number, InstructionCoverage[]>();
         const fileExecLines = executableLines.get(filePath) ?? new Set();
 
         const processedLines = fileLines.map((lineObj, lineNumber): Line => {
             const infos = fileSteps.get(lineNumber);
+            const instructions = fileInstructions.get(lineNumber) ?? [];
 
             if (infos) {
-                const gasInfo = infos.flatMap(step => {
+                const gasValues = infos.flatMap(step => {
                     if (!step.countGas) {
-                        return []
+                        return [];
                     }
                     return normalizeGas(step.step.gasCost);
-                }).reduce((acc: number, gas: number) => acc + gas, 0);
+                });
 
                 return {
                     line: lineObj.line,
                     info: {
                         $: "Covered",
-                        hits: infos.length,
-                        gasCosts: [gasInfo],
+                        hits: gasValues.length,
+                        gasCosts: gasValues,
+                        instructions: instructions.length > 0 ? instructions : undefined,
                     } as Covered,
                 };
             }
@@ -214,6 +266,7 @@ export const buildTolkLineInfo = (trace: trace.TraceInfo, sourceMap?: HighLevelM
                 line: lineObj.line,
                 info: {
                     $: "Uncovered",
+                    instructions: instructions.length > 0 ? instructions : undefined,
                 },
             };
         });
@@ -249,7 +302,7 @@ export function generateCoverageSummary(coverage: CoverageData): CoverageSummary
     for (const [filePath, fileLines] of coverage.lines) {
         const fileExecLines = coverage.executableLines?.get(filePath) || new Set();
 
-        fileLines.forEach((line, lineNumber) => {
+        for (const [lineNumber, line] of fileLines.entries()) {
             const isLineExecutable = coverage.executableLines
                 ? fileExecLines.has(lineNumber)
                 : isExecutableLine(line.line);
@@ -260,7 +313,7 @@ export function generateCoverageSummary(coverage: CoverageData): CoverageSummary
                     coveredLines++;
                 }
             }
-        });
+        }
     }
 
     const uncoveredLines = totalExecutableLines - coveredLines;
