@@ -30,12 +30,15 @@ import {
 } from '../src';
 import {bigintToAddress} from './blockchain/web-ui-websocket';
 
+declare const base64Brand: unique symbol;
+export type Base64String = string & { readonly [base64Brand]: true };
+
 export type ExtendedGetResult = ContractGetMethodResult & { vmLogs: string };
 
 interface DeployRequest {
     readonly stateInit: {
-        readonly code: string; // base64
-        readonly data: string; // base64
+        readonly code: Base64String;
+        readonly data: Base64String;
     };
     readonly value: string; // nano TON amount
     readonly name: string;
@@ -48,7 +51,7 @@ interface MessageTemplate {
     readonly id: string;
     readonly name: string;
     readonly opcode: number; // message opcode for filtering
-    readonly messageBody: string; // Base64 encoded BoC
+    readonly messageBody: Base64String;
     readonly sendMode: number;
     readonly value: string; // nano TON amount
     readonly createdAt: string; // ISO date string
@@ -58,7 +61,7 @@ interface MessageTemplate {
 interface CreateTemplateRequest {
     readonly name: string;
     readonly opcode: number;
-    readonly messageBody: string; // Base64 encoded BoC
+    readonly messageBody: Base64String;
     readonly sendMode: number;
     readonly value: string; // nano TON amount
     readonly description?: string;
@@ -72,21 +75,21 @@ interface UpdateTemplateRequest {
 
 interface SendExternalMessageRequest {
     readonly address: string;
-    readonly message: string; // base64 Cell
+    readonly message: Base64String;
 }
 
 interface SendInternalMessageRequest {
     readonly fromAddress: string;
     readonly toAddress: string;
-    readonly message: string; // base64 Cell
+    readonly message: Base64String; // base64 Cell
     readonly sendMode: number;
-    readonly value?: string; // nano TON amount
+    readonly value?: string;
 }
 
 interface GetMethodRequest {
     readonly address: string;
     readonly methodId: number;
-    readonly parameters: string; // base64 encoded tuple parameters
+    readonly parameters: Base64String;
 }
 
 interface InfoMethodRequest {
