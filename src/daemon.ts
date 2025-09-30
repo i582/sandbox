@@ -20,7 +20,14 @@ import {
     TupleReader,
 } from '@ton/core';
 
-import {Blockchain, BlockchainTransaction, SandboxContract, SendMessageResult, TreasuryContract,} from '../src';
+import {
+    Blockchain,
+    BlockchainSnapshot,
+    BlockchainTransaction,
+    SandboxContract,
+    SendMessageResult,
+    TreasuryContract,
+} from '../src';
 import {bigintToAddress} from './blockchain/web-ui-websocket';
 
 export type ExtendedGetResult = ContractGetMethodResult & { vmLogs: string };
@@ -30,11 +37,11 @@ interface DeployRequest {
         readonly code: string; // base64
         readonly data: string; // base64
     };
-    readonly value?: string; // nano TON amount
-    readonly name?: string;
+    readonly value: string; // nano TON amount
+    readonly name: string;
     readonly sourceMap?: object;
     readonly abi?: object;
-    readonly sourceUri?: string; // URI of the source file
+    readonly sourceUri: string; // URI of the source file
 }
 
 interface MessageTemplate {
@@ -43,7 +50,7 @@ interface MessageTemplate {
     readonly opcode: number; // message opcode for filtering
     readonly messageBody: string; // Base64 encoded BoC
     readonly sendMode: number;
-    readonly value?: string; // nano TON amount
+    readonly value: string; // nano TON amount
     readonly createdAt: string; // ISO date string
     readonly description?: string;
 }
@@ -53,7 +60,7 @@ interface CreateTemplateRequest {
     readonly opcode: number;
     readonly messageBody: string; // Base64 encoded BoC
     readonly sendMode: number;
-    readonly value?: string; // nano TON amount
+    readonly value: string; // nano TON amount
     readonly description?: string;
 }
 
@@ -102,7 +109,6 @@ export interface OperationNode {
     readonly fromContract?: string;
     readonly toContract?: string;
     readonly sendResult?: SendMessageResult;
-    readonly opcode?: number;
 }
 
 interface OperationsResponse {
@@ -150,34 +156,78 @@ class DaemonContract implements Contract {
     }
 }
 
+export interface BlockchainDaemonSnapshot {
+    readonly blockchain: BlockchainSnapshot
+    readonly contracts: Map<string, SandboxContract<DaemonContract>>
+    readonly contractInfos: Map<string, DeployedContractInfo>
+    readonly operations: OperationNode[]
+}
+
+export interface SendMessageTransactionInfo {
+    readonly addr?: string;
+    readonly vmLogs?: string;
+    readonly code?: string;
+    readonly sourceMap?: object;
+}
+
+export interface SendMessageResponse {
+    readonly success: boolean;
+    readonly txs?: readonly SendMessageTransactionInfo[];
+    readonly error?: string;
+}
+
+export interface DeployedContractInfo {
+    readonly address: string;
+    readonly name: string;
+    readonly sourceMap?: object;
+    readonly abi?: object;
+    readonly sourceUri: string;
+}
+
+export interface ContractStateInfo {
+    readonly account: string;
+    readonly stateInit?: {
+        readonly code: string;
+        readonly data: string;
+    };
+    readonly abi?: object;
+    readonly sourceUri: string;
+}
+
 class SandboxDaemon {
-    public blockchain: Blockchain;
-    public treasury: SandboxContract<TreasuryContract>;
     public contracts: Map<string, SandboxContract<DaemonContract>> = new Map();
-    public contractInfos: Map<string, { name?: string; sourceMap?: object; abi?: object; sourceUri?: string }> =
-        new Map();
+    public contractInfos: Map<string, DeployedContractInfo> = new Map();
     public operations: OperationNode[] = [];
-    public snapshots: Map<string, any> = new Map(); // operationId -> full daemon state snapshot
+    public snapshots: Map<string, BlockchainDaemonSnapshot> = new Map();
     public messageTemplates: Map<string, MessageTemplate> = new Map();
 
-    constructor(blockchain: Blockchain, treasury: SandboxContract<TreasuryContract>) {
-        this.blockchain = blockchain;
-        this.treasury = treasury;
+    public static async create(): Promise<SandboxDaemon> {
+        const blockchain = await Blockchain.create({webUI: true});
+        blockchain.verbosity.print = false;
+        blockchain.verbosity.vmLogs = 'vm_logs_verbose';
 
-        // Add treasury info to contractInfos for proper name resolution
+        const treasury = await blockchain.treasury('treasury');
+        return new SandboxDaemon(blockchain, treasury);
+    }
+
+    constructor(
+        public blockchain: Blockchain,
+        public treasury: SandboxContract<TreasuryContract>,
+    ) {
         this.contractInfos.set(treasury.address.toString(), {
+            address: treasury.address.toString(),
             name: 'treasury',
             sourceMap: undefined,
             abi: undefined,
+            sourceUri: 'treasury.func',
         });
 
-        // Save initial daemon state snapshot
         try {
-            const initialDaemonStateSnapshot = {
+            const initialDaemonStateSnapshot: BlockchainDaemonSnapshot = {
                 blockchain: this.blockchain.snapshot(),
-                contracts: new Map(this.contracts), // Initially empty
-                contractInfos: new Map(this.contractInfos), // Only treasury info
-                operations: [], // Initially empty
+                contracts: new Map(this.contracts),
+                contractInfos: new Map(this.contractInfos),
+                operations: [],
             };
             this.snapshots.set('initial', initialDaemonStateSnapshot);
             console.log('Saved initial daemon state snapshot');
@@ -188,19 +238,18 @@ class SandboxDaemon {
 
     private addOperation(operation: Omit<OperationNode, 'id' | 'timestamp'>): void {
         const newOperation: OperationNode = {
-            id: `op-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            id: `op-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
             timestamp: new Date().toISOString(),
             ...operation,
         };
 
-        // Save full daemon state snapshot before this operation
         if (operation.success) {
             try {
-                const daemonStateSnapshot = {
+                const daemonStateSnapshot: BlockchainDaemonSnapshot = {
                     blockchain: this.blockchain.snapshot(),
-                    contracts: new Map(this.contracts), // Clone the contracts map
-                    contractInfos: new Map(this.contractInfos), // Clone the contractInfos map
-                    operations: [...this.operations], // Clone the operations array
+                    contracts: new Map(this.contracts),
+                    contractInfos: new Map(this.contractInfos),
+                    operations: [...this.operations],
                 };
                 this.snapshots.set(newOperation.id, daemonStateSnapshot);
                 console.log(`Saved full daemon state snapshot for operation ${newOperation.id}`);
@@ -209,17 +258,7 @@ class SandboxDaemon {
             }
         }
 
-        this.operations.push(newOperation); // Добавляем в конец массива (старые операции сверху)
-    }
-
-    public static async create(): Promise<SandboxDaemon> {
-        const blockchain = await Blockchain.create({webUI: true});
-        blockchain.verbosity.print = false;
-        blockchain.verbosity.vmLogs = 'vm_logs_verbose';
-
-        const treasury = await blockchain.treasury('treasury');
-
-        return new SandboxDaemon(blockchain, treasury);
+        this.operations.push(newOperation);
     }
 
     public async deployContract(
@@ -228,7 +267,7 @@ class SandboxDaemon {
         valueAmount: bigint,
         sourceMap: object | undefined,
         abi: object | undefined,
-        sourceUri?: string,
+        sourceUri: string,
     ): Promise<{
         address: string;
         success: boolean;
@@ -238,7 +277,6 @@ class SandboxDaemon {
             const contract = new DaemonContract(address, stateInit, sourceMap, name, abi);
             const openContract = this.blockchain.openContract(contract, name);
 
-            // Deploy with empty message
             await openContract.send(
                 this.treasury.getSender(),
                 {value: valueAmount},
@@ -248,13 +286,13 @@ class SandboxDaemon {
 
             this.contracts.set(address.toString(), openContract);
             this.contractInfos.set(address.toString(), {
+                address: address.toString(),
                 name: name,
                 sourceMap: sourceMap,
                 abi: abi,
                 sourceUri: sourceUri,
             });
 
-            // Add operation to history
             this.addOperation({
                 type: 'deploy',
                 contractName: name,
@@ -270,7 +308,6 @@ class SandboxDaemon {
         } catch (error) {
             console.error('Deploy error:', error);
 
-            // Add failed operation to history
             this.addOperation({
                 type: 'deploy',
                 contractName: name,
@@ -285,33 +322,22 @@ class SandboxDaemon {
         }
     }
 
-    /**
-     * Send external message from treasury to contract
-     */
+    private blockchainTxToInfo(tx: BlockchainTransaction): SendMessageTransactionInfo {
+        const addr = (tx.inMessage?.info.dest as Address).toString();
+        const contract = this.contracts.get(addr);
+        const code = (contract?.init?.code ?? new Cell()).toBoc().toString('hex');
+        return {
+            addr: addr,
+            vmLogs: tx.vmLogs,
+            code: code,
+            sourceMap: contract?.sourceMap,
+        };
+    };
+
     public async sendExternalMessage(
         address: string,
         message: Cell,
-    ): Promise<{
-        success: boolean;
-        txs?: {
-            addr?: string;
-            vmLogs?: string;
-            code?: string;
-            mapping?: object;
-        }[];
-        error?: string;
-    }> {
-        // Try to extract opcode from message
-        let opcode: number | undefined;
-        try {
-            const slice = message.beginParse();
-            if (slice.remainingBits >= 32) {
-                opcode = slice.loadUint(32);
-            }
-        } catch {
-            // Ignore if we can't parse opcode
-        }
-
+    ): Promise<SendMessageResponse> {
         try {
             const contract = this.contracts.get(address);
             if (!contract) {
@@ -325,7 +351,6 @@ class SandboxDaemon {
                 }),
             );
 
-            // Add operation to history
             const contractInfo = this.contractInfos.get(address);
             this.addOperation({
                 type: 'send-external',
@@ -334,26 +359,15 @@ class SandboxDaemon {
                 details: `External message sent to ${contractInfo?.name || address}`,
                 success: true,
                 sendResult: result,
-                opcode,
             });
 
             return {
                 success: true,
-                txs: result.transactions.slice(1).map((tx) => {
-                    const addr = (tx.inMessage?.info.dest as Address).toString();
-                    const code = (this.contracts.get(addr)?.init?.code ?? new Cell()).toBoc().toString('hex');
-                    return {
-                        addr: addr,
-                        vmLogs: tx.vmLogs,
-                        code: code,
-                        sourceMap: this.contracts.get(addr)?.sourceMap,
-                    };
-                }),
+                txs: result.transactions.slice(1).map(tx => this.blockchainTxToInfo(tx)),
             };
         } catch (error) {
             console.error('Send message error:', error);
 
-            // Add failed operation to history
             const contractInfo = this.contractInfos.get(address);
             this.addOperation({
                 type: 'send-external',
@@ -361,7 +375,59 @@ class SandboxDaemon {
                 contractAddress: address,
                 details: `Failed to send external message to ${contractInfo?.name || address}: ${error instanceof Error ? error.message : 'Unknown error'}`,
                 success: false,
-                opcode,
+            });
+
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : 'Unknown error',
+            };
+        }
+    }
+
+    public async sendInternalMessage(
+        fromAddress: string,
+        toAddress: string,
+        message: Cell,
+        sendMode: number,
+        value: bigint,
+    ): Promise<SendMessageResponse> {
+        try {
+            const fromContract =
+                fromAddress === this.treasury.address.toString() ? this.treasury : this.contracts.get(fromAddress);
+            if (!fromContract) {
+                return {success: false, error: 'From contract not found'};
+            }
+
+            const toContract = this.contracts.get(toAddress);
+            if (!toContract) {
+                return {success: false, error: 'To contract not found'};
+            }
+
+            const fromContractSender = this.blockchain.sender(fromContract.address);
+
+            const result = await toContract.send(fromContractSender, {value, bounce: false}, message, sendMode);
+
+            this.addOperation({
+                type: 'send-internal',
+                fromContract: fromAddress,
+                toContract: toAddress,
+                success: true,
+                sendResult: result,
+            });
+
+            return {
+                success: true,
+                txs: result.transactions.slice(0, -1).map(tx => this.blockchainTxToInfo(tx)),
+            };
+        } catch (error) {
+            console.error('Send internal message error:', error);
+
+            this.addOperation({
+                type: 'send-internal',
+                fromContract: fromAddress,
+                toContract: toAddress,
+                details: error instanceof Error ? error.message : 'Unknown error',
+                success: false,
             });
 
             return {
@@ -405,76 +471,30 @@ class SandboxDaemon {
         }
     }
 
-    public getDeployedContracts(): Array<{
-        address: string;
-        name?: string;
-        sourceMap?: object;
-        abi?: object;
-        sourceUri?: string;
-    }> {
-        const contracts = Array.from(this.contracts.entries()).map(([address]) => {
-            const info = this.contractInfos.get(address);
-            return {
-                address,
-                name: info?.name,
-                sourceMap: info?.sourceMap,
-                abi: info?.abi,
-                sourceUri: info?.sourceUri,
-            };
-        });
-
-        // Add treasury contract to the list
-        contracts.unshift({
-            address: this.treasury.address.toString(),
-            name: 'treasury',
-            sourceMap: undefined,
-            abi: undefined,
-            sourceUri: undefined,
-        });
-
-        return contracts;
+    public getDeployedContracts(): DeployedContractInfo[] {
+        return [...this.contractInfos.values()];
     }
 
     public removeContract(address: string): boolean {
-        // Don't allow removing treasury contract
         if (address === this.treasury.address.toString()) {
+            // Don't allow removing treasury contract
             return false;
         }
 
-        const hadContract = this.contracts.has(address);
-        const hadInfo = this.contractInfos.has(address);
-
-        if (hadContract) {
-            this.contracts.delete(address);
-        }
-
-        if (hadInfo) {
-            this.contractInfos.delete(address);
-        }
-
-        return hadContract || hadInfo;
+        this.contracts.delete(address);
+        this.contractInfos.delete(address);
+        return true;
     }
 
     public async getInfo(address: string): Promise<{
         success: boolean;
-        result?: {
-            account: string;
-            stateInit?: {
-                code: string;
-                data: string;
-            };
-            abi?: object;
-            sourceUri?: string;
-        };
+        result?: ContractStateInfo;
         error?: string;
     }> {
         try {
-            // Check if it's treasury
             if (address === this.treasury.address.toString()) {
                 const blockchainContract = await this.blockchain.getContract(this.treasury.address);
-
                 const accountCell = beginCell().store(storeShardAccount(blockchainContract.account)).endCell();
-
                 let stateInit: { code: string; data: string } | undefined;
                 if (this.treasury.init && this.treasury.init.code && this.treasury.init.data) {
                     stateInit = {
@@ -488,8 +508,8 @@ class SandboxDaemon {
                     result: {
                         account: accountCell.toBoc().toString('hex'),
                         stateInit,
-                        abi: undefined, // Treasury doesn't have ABI
-                        sourceUri: undefined, // Treasury doesn't have source file
+                        abi: undefined,
+                        sourceUri: "treasury.func",
                     },
                 };
             }
@@ -500,9 +520,7 @@ class SandboxDaemon {
             }
 
             const blockchainContract = await this.blockchain.getContract(contract.address);
-
             const accountCell = beginCell().store(storeShardAccount(blockchainContract.account)).endCell();
-
             let stateInit: { code: string; data: string } | undefined;
             if (contract.init && contract.init.code && contract.init.data) {
                 stateInit = {
@@ -512,8 +530,12 @@ class SandboxDaemon {
             }
 
             const contractInfo = this.contractInfos.get(address);
+            if (!contractInfo) {
+                console.warn(`Contract ${address} has no info!`);
+            }
+
             const abi = contractInfo?.abi;
-            const sourceUri = contractInfo?.sourceUri;
+            const sourceUri = contractInfo?.sourceUri ?? "unknown.tolk";
 
             return {
                 success: true,
@@ -546,7 +568,10 @@ class SandboxDaemon {
                 return {success: false, error: 'Contract not found'};
             }
 
-            contractInfo.name = newName;
+            this.contractInfos.set(address, {
+                ...contractInfo,
+                name: newName,
+            })
 
             console.log(`Renamed contract ${address} to "${newName}"`);
 
@@ -562,9 +587,8 @@ class SandboxDaemon {
         }
     }
 
-    // Message Template methods
     public createMessageTemplate(templateData: Omit<MessageTemplate, 'id' | 'createdAt'>): MessageTemplate {
-        const id = `template_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const id = `template_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
         const template: MessageTemplate = {
             id,
             name: templateData.name,
@@ -581,7 +605,7 @@ class SandboxDaemon {
     }
 
     public getMessageTemplates(): MessageTemplate[] {
-        return Array.from(this.messageTemplates.values());
+        return [...this.messageTemplates.values()];
     }
 
     public getMessageTemplate(id: string): MessageTemplate | undefined {
@@ -607,7 +631,7 @@ class SandboxDaemon {
     }
 
     public getLatestOperation(): OperationNode | undefined {
-        return this.operations[this.operations.length - 1];
+        return this.operations.at(-1);
     }
 
     public getLatestOperationResultString(): string | undefined {
@@ -616,90 +640,6 @@ class SandboxDaemon {
             return this.serializeTransactions(operation.sendResult.transactions);
         }
         return undefined;
-    }
-
-    public async sendInternalMessage(
-        fromAddress: string,
-        toAddress: string,
-        message: Cell,
-        sendMode: number,
-        value: bigint = toNano('1'),
-    ): Promise<{
-        success: boolean;
-        txs?: {
-            addr?: string;
-            vmLogs?: string;
-            code?: string;
-            sourceMap?: object;
-        }[];
-        error?: string;
-    }> {
-        // Try to extract opcode from message
-        let opcode: number | undefined;
-        try {
-            const slice = message.beginParse();
-            if (slice.remainingBits >= 32) {
-                opcode = slice.loadUint(32);
-            }
-        } catch {
-            // Ignore if we can't parse opcode
-        }
-
-        try {
-            const fromContract =
-                fromAddress === this.treasury.address.toString() ? this.treasury : this.contracts.get(fromAddress);
-            if (!fromContract) {
-                return {success: false, error: 'From contract not found'};
-            }
-
-            const toContract = this.contracts.get(toAddress);
-            if (!toContract) {
-                return {success: false, error: 'To contract not found'};
-            }
-
-            const fromContractSender = this.blockchain.sender(fromContract.address);
-
-            const result = await toContract.send(fromContractSender, {value, bounce: false}, message, sendMode);
-
-            this.addOperation({
-                type: 'send-internal',
-                fromContract: fromAddress,
-                toContract: toAddress,
-                success: true,
-                sendResult: result,
-                opcode,
-            });
-
-            return {
-                success: true,
-                txs: result.transactions.slice(0, -1).map((tx) => {
-                    const addr = (tx.inMessage?.info.dest as Address).toString();
-                    const code = (this.contracts.get(addr)?.init?.code ?? new Cell()).toBoc().toString('hex');
-                    return {
-                        addr: addr,
-                        vmLogs: tx.vmLogs,
-                        code: code,
-                        sourceMap: this.contracts.get(addr)?.sourceMap,
-                    };
-                }),
-            };
-        } catch (error) {
-            console.error('Send internal message error:', error);
-
-            this.addOperation({
-                type: 'send-internal',
-                fromContract: fromAddress,
-                toContract: toAddress,
-                details: error instanceof Error ? error.message : 'Unknown error',
-                success: false,
-                opcode,
-            });
-
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : 'Unknown error',
-            };
-        }
     }
 
     public serializeTransactions(transactions: BlockchainTransaction[]): string {
@@ -752,17 +692,15 @@ app.post('/deploy', async (req, res) => {
             return res.status(400).json({error: 'Missing stateInit.code or stateInit.data'});
         }
 
-        const valueAmount = value ? toNano(value) : toNano('1');
-
         const init: StateInit = {
             code: Cell.fromBase64(stateInit.code),
             data: Cell.fromBase64(stateInit.data),
         };
 
         const result = await daemon.deployContract(
-            name ?? 'UnknownContract',
+            name,
             init,
-            valueAmount,
+            toNano(value),
             sourceMap,
             abi,
             sourceUri,
@@ -873,14 +811,7 @@ app.post('/rename-contract', async (req, res) => {
 
 app.get('/contracts', async (_req, res) => {
     try {
-        const deployedContracts = daemon.getDeployedContracts();
-        const contracts = deployedContracts.map(({address, name, sourceMap, abi, sourceUri}) => ({
-            address,
-            name: name ?? 'Unknown',
-            sourceMap,
-            abi,
-            sourceUri,
-        }));
+        const contracts = daemon.getDeployedContracts();
         res.json({contracts});
     } catch (error) {
         console.error('Get contracts error:', error);
@@ -1030,9 +961,7 @@ app.post('/message-templates', async (req, res) => {
         const templateData: CreateTemplateRequest = req.body;
         if (
             !templateData.name ||
-            typeof templateData.opcode !== 'number' ||
-            !templateData.messageBody ||
-            typeof templateData.sendMode !== 'number'
+            !templateData.messageBody
         ) {
             return res.status(400).json({error: 'Missing required fields: name, opcode, messageBody, sendMode'});
         }
