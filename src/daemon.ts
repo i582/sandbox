@@ -10,24 +10,18 @@ import {
     ContractGetMethodResult,
     ContractProvider,
     external,
-    Sender, serializeTuple,
+    parseTuple,
+    Sender,
+    serializeTuple,
     StateInit,
     storeShardAccount,
     storeTransaction,
     toNano,
     Transaction,
-    TupleBuilder, TupleReader,
+    TupleReader,
 } from '@ton/core';
 
-import {
-    Blockchain,
-    BlockchainSender,
-    BlockchainTransaction,
-    internal,
-    SandboxContract,
-    SendMessageResult,
-    TreasuryContract,
-} from '../src';
+import {Blockchain, BlockchainTransaction, SandboxContract, SendMessageResult, TreasuryContract,} from '../src';
 import {bigintToAddress} from './blockchain/web-ui-websocket';
 import {TupleItem} from "@ton/core/src/tuple/tuple";
 
@@ -87,6 +81,7 @@ interface SendInternalMessageRequest {
 interface GetMethodRequest {
     readonly address: string;
     readonly methodId: number;
+    readonly parameters: string; // base64 encoded tuple parameters
 }
 
 interface InfoMethodRequest {
@@ -141,9 +136,18 @@ class DaemonContract implements Contract {
         await provider.internal(via, {...args, sendMode, body});
     }
 
-    async getAny(provider: ContractProvider, id: number): [TupleReader, string] {
-        const builder = new TupleBuilder();
-        const res = (await provider.get(id, builder.build())) as ExtendedGetResult;
+    async getAny(provider: ContractProvider, id: number, parametersBase64: string): [TupleReader, string] {
+        let parameters: TupleItem[] = [];
+
+        try {
+            const paramCell = Cell.fromBase64(parametersBase64);
+            parameters = parseTuple(paramCell);
+        } catch (error) {
+            console.warn('Failed to parse parameters:', error);
+        }
+
+        console.log("Call get method with id", id, "and parameters:", parameters, "")
+        const res = (await provider.get(id, parameters)) as ExtendedGetResult;
         return [res.stack, res.vmLogs];
     }
 }
@@ -372,6 +376,7 @@ class SandboxDaemon {
     async callGetMethod(
         address: string,
         methodId: number,
+        parametersBase64: string,
     ): Promise<{
         success: boolean;
         result?: string;
@@ -384,7 +389,7 @@ class SandboxDaemon {
                 return {success: false, error: 'Contract not found'};
             }
 
-            const [stack, logs] = await contract.getAny(methodId);
+            const [stack, logs] = await contract.getAny(methodId, parametersBase64);
 
             return {
                 success: true,
@@ -806,13 +811,13 @@ app.post('/send-internal', async (req, res) => {
 
 app.post('/get', async (req, res) => {
     try {
-        const {address, methodId}: GetMethodRequest = req.body;
+        const {address, methodId, parameters}: GetMethodRequest = req.body;
 
         if (!address || methodId === undefined) {
             return res.status(400).json({error: 'Missing address or methodId'});
         }
 
-        const result = await daemon.callGetMethod(address, methodId);
+        const result = await daemon.callGetMethod(address, methodId, parameters);
         res.json(result);
     } catch (error) {
         console.error('Get endpoint error:', error);
