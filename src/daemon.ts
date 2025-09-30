@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 import express from 'express';
 import {
     Address,
@@ -18,12 +16,12 @@ import {
     storeTransaction,
     toNano,
     Transaction,
+    TupleItem,
     TupleReader,
 } from '@ton/core';
 
 import {Blockchain, BlockchainTransaction, SandboxContract, SendMessageResult, TreasuryContract,} from '../src';
 import {bigintToAddress} from './blockchain/web-ui-websocket';
-import {TupleItem} from "@ton/core/src/tuple/tuple";
 
 export type ExtendedGetResult = ContractGetMethodResult & { vmLogs: string };
 
@@ -126,7 +124,7 @@ class DaemonContract implements Contract {
         this.abi = abi;
     }
 
-    async send(
+    public async send(
         provider: ContractProvider,
         via: Sender,
         args: { value: bigint; bounce?: boolean },
@@ -136,7 +134,7 @@ class DaemonContract implements Contract {
         await provider.internal(via, {...args, sendMode, body});
     }
 
-    async getAny(provider: ContractProvider, id: number, parametersBase64: string): [TupleReader, string] {
+    public async getAny(provider: ContractProvider, id: number, parametersBase64: string): Promise<[TupleReader, string]> {
         let parameters: TupleItem[] = [];
 
         try {
@@ -214,7 +212,7 @@ class SandboxDaemon {
         this.operations.push(newOperation); // Добавляем в конец массива (старые операции сверху)
     }
 
-    static async create(): Promise<SandboxDaemon> {
+    public static async create(): Promise<SandboxDaemon> {
         const blockchain = await Blockchain.create({webUI: true});
         blockchain.verbosity.print = false;
         blockchain.verbosity.vmLogs = 'vm_logs_verbose';
@@ -224,7 +222,7 @@ class SandboxDaemon {
         return new SandboxDaemon(blockchain, treasury);
     }
 
-    async deployContract(
+    public async deployContract(
         name: string,
         stateInit: StateInit,
         valueAmount: bigint,
@@ -290,7 +288,7 @@ class SandboxDaemon {
     /**
      * Send external message from treasury to contract
      */
-    async sendExternalMessage(
+    public async sendExternalMessage(
         address: string,
         message: Cell,
     ): Promise<{
@@ -373,7 +371,7 @@ class SandboxDaemon {
         }
     }
 
-    async callGetMethod(
+    public async callGetMethod(
         address: string,
         methodId: number,
         parametersBase64: string,
@@ -391,10 +389,12 @@ class SandboxDaemon {
 
             const [stack, logs] = await contract.getAny(methodId, parametersBase64);
 
+            // @ts-expect-error we need items as an array, and there is no other way to get it AFAIK
+            const items = stack.items as TupleItem[];
             return {
                 success: true,
-                result: serializeTuple(stack.items as TupleItem[]).toBoc().toString('base64'),
-                logs: typeof logs === 'string' ? logs : logs.toString(),
+                result: serializeTuple(items).toBoc().toString('base64'),
+                logs,
             };
         } catch (error) {
             console.error('Get method error:', error);
@@ -405,7 +405,7 @@ class SandboxDaemon {
         }
     }
 
-    getDeployedContracts(): Array<{
+    public getDeployedContracts(): Array<{
         address: string;
         name?: string;
         sourceMap?: object;
@@ -435,7 +435,7 @@ class SandboxDaemon {
         return contracts;
     }
 
-    removeContract(address: string): boolean {
+    public removeContract(address: string): boolean {
         // Don't allow removing treasury contract
         if (address === this.treasury.address.toString()) {
             return false;
@@ -455,7 +455,7 @@ class SandboxDaemon {
         return hadContract || hadInfo;
     }
 
-    async getInfo(address: string): Promise<{
+    public async getInfo(address: string): Promise<{
         success: boolean;
         result?: {
             account: string;
@@ -533,7 +533,7 @@ class SandboxDaemon {
         }
     }
 
-    async renameContract(
+    public async renameContract(
         address: string,
         newName: string,
     ): Promise<{
@@ -563,7 +563,7 @@ class SandboxDaemon {
     }
 
     // Message Template methods
-    createMessageTemplate(templateData: Omit<MessageTemplate, 'id' | 'createdAt'>): MessageTemplate {
+    public createMessageTemplate(templateData: Omit<MessageTemplate, 'id' | 'createdAt'>): MessageTemplate {
         const id = `template_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const template: MessageTemplate = {
             id,
@@ -580,15 +580,15 @@ class SandboxDaemon {
         return template;
     }
 
-    getMessageTemplates(): MessageTemplate[] {
+    public getMessageTemplates(): MessageTemplate[] {
         return Array.from(this.messageTemplates.values());
     }
 
-    getMessageTemplate(id: string): MessageTemplate | undefined {
+    public getMessageTemplate(id: string): MessageTemplate | undefined {
         return this.messageTemplates.get(id);
     }
 
-    updateMessageTemplate(id: string, updates: Partial<Pick<MessageTemplate, 'name' | 'description'>>): boolean {
+    public updateMessageTemplate(id: string, updates: Partial<Pick<MessageTemplate, 'name' | 'description'>>): boolean {
         const template = this.messageTemplates.get(id);
         if (!template) return false;
 
@@ -598,7 +598,7 @@ class SandboxDaemon {
         return true;
     }
 
-    deleteMessageTemplate(id: string): boolean {
+    public deleteMessageTemplate(id: string): boolean {
         const deleted = this.messageTemplates.delete(id);
         if (deleted) {
             console.log(`Deleted message template: ${id}`);
@@ -606,7 +606,19 @@ class SandboxDaemon {
         return deleted;
     }
 
-    async sendInternalMessage(
+    public getLatestOperation(): OperationNode | undefined {
+        return this.operations[this.operations.length - 1];
+    }
+
+    public getLatestOperationResultString(): string | undefined {
+        const operation = this.getLatestOperation();
+        if (operation?.sendResult) {
+            return this.serializeTransactions(operation.sendResult.transactions);
+        }
+        return undefined;
+    }
+
+    public async sendInternalMessage(
         fromAddress: string,
         toAddress: string,
         message: Cell,
@@ -649,8 +661,6 @@ class SandboxDaemon {
 
             const result = await toContract.send(fromContractSender, {value, bounce: false}, message, sendMode);
 
-            const fromContractInfo = this.contractInfos.get(fromAddress);
-            const toContractInfo = this.contractInfos.get(toAddress);
             this.addOperation({
                 type: 'send-internal',
                 fromContract: fromAddress,
@@ -676,8 +686,6 @@ class SandboxDaemon {
         } catch (error) {
             console.error('Send internal message error:', error);
 
-            const fromContractInfo = this.contractInfos.get(fromAddress);
-            const toContractInfo = this.contractInfos.get(toAddress);
             this.addOperation({
                 type: 'send-internal',
                 fromContract: fromAddress,
@@ -931,6 +939,31 @@ app.get('/operations', async (_req, res) => {
     }
 });
 
+app.get('/operations/latest/result', async (req, res) => {
+    try {
+        const operation = daemon.getLatestOperation();
+        if (!operation) {
+            console.log(daemon.operations)
+            return res.status(404).json({error: 'No operations found'});
+        }
+
+        const resultString = daemon.getLatestOperationResultString();
+
+        res.json({
+            operation: {
+                ...operation,
+                resultString,
+                sendResult: undefined, // Remove sendResult for client
+            }
+        });
+    } catch (error) {
+        console.error('Get latest operation result error:', error);
+        res.status(500).json({
+            error: error instanceof Error ? error.message : 'Internal server error',
+        });
+    }
+});
+
 app.post('/restore-state', async (req, res) => {
     try {
         const {eventId} = req.body as { eventId: string };
@@ -1094,6 +1127,7 @@ const startServer = async () => {
         console.log(`  POST /rename-contract - Rename contract`);
         console.log(`  GET /contracts - Get deployed contracts`);
         console.log(`  GET /operations - Get operation history`);
+        console.log(`  GET /operations/latest/result - Get latest operation result`);
         console.log(`  POST /message-templates - Create message template`);
         console.log(`  GET /message-templates - Get all message templates`);
         console.log(`  GET /message-templates/:id - Get message template by ID`);
