@@ -29,6 +29,142 @@ import {
 } from '../src';
 import { bigintToAddress } from './blockchain/web-ui-websocket';
 
+enum LogLevel {
+    TRACE = 0,
+    DEBUG = 1,
+    INFO = 2,
+    WARN = 3,
+    ERROR = 4,
+    FATAL = 5,
+}
+
+interface LogEntry {
+    timestamp: string;
+    level: string;
+    message: string;
+    context?: Record<string, any>;
+    error?: {
+        name: string;
+        message: string;
+        stack?: string;
+    };
+}
+
+class Logger {
+    private static instance: Logger;
+    private readonly currentLevel: LogLevel;
+    private readonly isJsonFormat: boolean;
+
+    private constructor() {
+        const logLevel = process.env.LOG_LEVEL ?? 'INFO';
+        this.currentLevel = LogLevel[logLevel as keyof typeof LogLevel] ?? LogLevel.INFO;
+        this.isJsonFormat = process.env.LOG_FORMAT === 'json' || process.env.NODE_ENV === 'production';
+    }
+
+    public static getInstance(): Logger {
+        if (!Logger.instance) {
+            Logger.instance = new Logger();
+        }
+        return Logger.instance;
+    }
+
+    private shouldLog(level: LogLevel): boolean {
+        return level >= this.currentLevel;
+    }
+
+    private formatLogEntry(entry: LogEntry): string {
+        if (this.isJsonFormat) {
+            return JSON.stringify(entry);
+        }
+
+        const timestamp = new Date(entry.timestamp).toISOString();
+        let logLine = `[${timestamp}] ${entry.level.toUpperCase().padEnd(5)} ${entry.message}`;
+
+        if (entry.context && Object.keys(entry.context).length > 0) {
+            logLine += ` ${JSON.stringify(entry.context)}`;
+        }
+
+        if (entry.error) {
+            logLine += `\n  Error: ${entry.error.message}`;
+            if (entry.error.stack) {
+                logLine += `\n  Stack: ${entry.error.stack}`;
+            }
+        }
+
+        return logLine;
+    }
+
+    private log(
+        level: LogLevel,
+        levelName: string,
+        message: string,
+        context?: Record<string, any>,
+        error?: Error,
+    ): void {
+        if (!this.shouldLog(level)) {
+            return;
+        }
+
+        const entry: LogEntry = {
+            timestamp: new Date().toISOString(),
+            level: levelName,
+            message,
+            context,
+        };
+
+        if (error) {
+            entry.error = {
+                name: error.name,
+                message: error.message,
+                stack: error.stack,
+            };
+        }
+
+        const output = this.formatLogEntry(entry);
+
+        switch (level) {
+            case LogLevel.TRACE:
+            case LogLevel.DEBUG:
+            case LogLevel.INFO:
+                console.log(output);
+                break;
+            case LogLevel.WARN:
+                console.warn(output);
+                break;
+            case LogLevel.ERROR:
+            case LogLevel.FATAL:
+                console.error(output);
+                break;
+        }
+    }
+
+    public trace(message: string, context?: Record<string, any>): void {
+        this.log(LogLevel.TRACE, 'trace', message, context);
+    }
+
+    public debug(message: string, context?: Record<string, any>): void {
+        this.log(LogLevel.DEBUG, 'debug', message, context);
+    }
+
+    public info(message: string, context?: Record<string, any>): void {
+        this.log(LogLevel.INFO, 'info', message, context);
+    }
+
+    public warn(message: string, context?: Record<string, any>, error?: Error): void {
+        this.log(LogLevel.WARN, 'warn', message, context, error);
+    }
+
+    public error(message: string, context?: Record<string, any>, error?: Error): void {
+        this.log(LogLevel.ERROR, 'error', message, context, error);
+    }
+
+    public fatal(message: string, context?: Record<string, any>, error?: Error): void {
+        this.log(LogLevel.FATAL, 'fatal', message, context, error);
+    }
+}
+
+const logger = Logger.getInstance();
+
 declare const base64Brand: unique symbol;
 export type Base64String = string & { readonly [base64Brand]: true };
 
@@ -183,10 +319,10 @@ class DaemonContract implements Contract {
             const paramCell = Cell.fromBase64(parametersBase64);
             parameters = parseTuple(paramCell);
         } catch (error) {
-            console.warn('Failed to parse parameters:', error);
+            logger.warn('Failed to parse parameters', { methodId: id }, error as Error);
         }
 
-        console.log('Call get method with id', id, 'and parameters:', parameters, '');
+        logger.debug('Call get method', { methodId: id, parameters });
         const res = (await provider.get(id, parameters)) as ExtendedGetResult;
         return [res.stack, res.vmLogs];
     }
@@ -260,9 +396,9 @@ class SandboxDaemon {
                 operations: [],
             };
             this.snapshots.set('initial', initialDaemonStateSnapshot);
-            console.log('Saved initial daemon state snapshot');
+            logger.info('Saved initial daemon state snapshot');
         } catch (error) {
-            console.warn('Failed to save initial snapshot:', error);
+            logger.warn('Failed to save initial snapshot', {}, error as Error);
         }
     }
 
@@ -282,9 +418,15 @@ class SandboxDaemon {
                     operations: [...this.operations],
                 };
                 this.snapshots.set(newOperation.id, daemonStateSnapshot);
-                console.log(`Saved full daemon state snapshot for operation ${newOperation.id}`);
+                logger.info(`Saved full daemon state snapshot for operation ${newOperation.id}`, {
+                    operationId: newOperation.id,
+                });
             } catch (error) {
-                console.warn(`Failed to save snapshot for operation ${newOperation.id}:`, error);
+                logger.warn(
+                    `Failed to save snapshot for operation ${newOperation.id}`,
+                    { operationId: newOperation.id },
+                    error as Error,
+                );
             }
         }
 
@@ -335,7 +477,7 @@ class SandboxDaemon {
                 },
             };
         } catch (error) {
-            console.error('Deploy error:', error);
+            logger.error('Deploy error', { contractName: name }, error as Error);
 
             this.addOperation({
                 type: 'deploy',
@@ -394,7 +536,11 @@ class SandboxDaemon {
                 },
             };
         } catch (error) {
-            console.error('Send message error:', error);
+            logger.error(
+                'Send external message error',
+                { address, contractName: this.contractInfos.get(address)?.name },
+                error as Error,
+            );
 
             const contractInfo = this.contractInfos.get(address);
             this.addOperation({
@@ -450,7 +596,7 @@ class SandboxDaemon {
                 },
             };
         } catch (error) {
-            console.error('Send internal message error:', error);
+            logger.error('Send internal message error', { fromAddress, toAddress }, error as Error);
 
             this.addOperation({
                 type: 'send-internal',
@@ -490,7 +636,7 @@ class SandboxDaemon {
                 },
             };
         } catch (error) {
-            console.error('Get method error:', error);
+            logger.error('Get method error', { address, methodId }, error as Error);
             return {
                 success: false,
                 error: error instanceof Error ? error.message : 'Unknown error',
@@ -554,7 +700,7 @@ class SandboxDaemon {
 
             const contractInfo = this.contractInfos.get(address);
             if (!contractInfo) {
-                console.warn(`Contract ${address} has no info!`);
+                logger.warn(`Contract has no info`, { address });
             }
 
             const abi = contractInfo?.abi;
@@ -570,7 +716,7 @@ class SandboxDaemon {
                 },
             };
         } catch (error) {
-            console.error('Get method error:', error);
+            logger.error('Get info error', { address }, error as Error);
             return {
                 success: false,
                 error: error instanceof Error ? error.message : 'Unknown error',
@@ -590,14 +736,14 @@ class SandboxDaemon {
                 name: newName,
             });
 
-            console.log(`Renamed contract ${address} to "${newName}"`);
+            logger.info(`Renamed contract`, { address, newName, oldName: contractInfo.name });
 
             return {
                 success: true,
                 data: {},
             };
         } catch (error) {
-            console.error('Rename contract error:', error);
+            logger.error('Rename contract error', { address, newName }, error as Error);
             return {
                 success: false,
                 error: error instanceof Error ? error.message : 'Unknown error',
@@ -620,7 +766,7 @@ class SandboxDaemon {
             createdAt: new Date().toISOString(),
         };
         this.messageTemplates.set(id, template);
-        console.log(`Created message template: ${template.name} (${id})`);
+        logger.info(`Created message template`, { templateId: id, templateName: template.name });
         return {
             success: true,
             data: template,
@@ -639,7 +785,7 @@ class SandboxDaemon {
     public deleteMessageTemplate(id: string): ApiResponse {
         const deleted = this.messageTemplates.delete(id);
         if (deleted) {
-            console.log(`Deleted message template: ${id}`);
+            logger.info(`Deleted message template`, { templateId: id });
             return { success: true, data: {} };
         }
         return { success: false, error: 'Template not found' };
@@ -696,10 +842,15 @@ let daemon: SandboxDaemon;
 
 const initDaemon = async () => {
     daemon = await SandboxDaemon.create();
-    console.log('Sandbox daemon initialized');
+    logger.info('Sandbox daemon initialized');
 };
 
 app.post('/deploy', async (req, res) => {
+    logger.trace('Deploy endpoint called', {
+        endpoint: '/deploy',
+        body: req.body,
+    });
+
     try {
         const { stateInit, value, name, sourceMap, abi, sourceUri }: DeployRequest = req.body;
 
@@ -715,7 +866,7 @@ app.post('/deploy', async (req, res) => {
         const result = await daemon.deployContract(name, init, BigInt(value), sourceMap, abi, sourceUri);
         res.json(result);
     } catch (error) {
-        console.error('Deploy endpoint error:', error);
+        logger.error('Deploy endpoint error', { endpoint: '/deploy' }, error as Error);
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
@@ -723,9 +874,15 @@ app.post('/deploy', async (req, res) => {
 });
 
 app.post('/send-external', async (req, res) => {
-    try {
-        const { address, message }: SendExternalMessageRequest = req.body;
+    const { address, message }: SendExternalMessageRequest = req.body;
 
+    logger.trace('Send external endpoint called', {
+        endpoint: '/send-external',
+        address,
+        messageLength: message?.length,
+    });
+
+    try {
         if (!address || !message) {
             return res.status(400).json({ error: 'Missing address or message' });
         }
@@ -735,7 +892,7 @@ app.post('/send-external', async (req, res) => {
         const result = await daemon.sendExternalMessage(address, messageCell);
         res.json(result);
     } catch (error) {
-        console.error('Send external endpoint error:', error);
+        logger.error('Send external endpoint error', { endpoint: '/send-external', address }, error as Error);
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
@@ -743,9 +900,18 @@ app.post('/send-external', async (req, res) => {
 });
 
 app.post('/send-internal', async (req, res) => {
-    try {
-        const { fromAddress, toAddress, message, sendMode, value }: SendInternalMessageRequest = req.body;
+    const { fromAddress, toAddress, message, sendMode, value }: SendInternalMessageRequest = req.body;
 
+    logger.trace('Send internal endpoint called', {
+        endpoint: '/send-internal',
+        fromAddress,
+        toAddress,
+        sendMode,
+        value,
+        message,
+    });
+
+    try {
         if (!fromAddress || !toAddress || !message) {
             return res.status(400).json({ error: 'Missing fromAddress, toAddress or message' });
         }
@@ -756,7 +922,11 @@ app.post('/send-internal', async (req, res) => {
         const result = await daemon.sendInternalMessage(fromAddress, toAddress, messageCell, sendMode, valueAmount);
         res.json(result);
     } catch (error) {
-        console.error('Send internal endpoint error:', error);
+        logger.error(
+            'Send internal endpoint error',
+            { endpoint: '/send-internal', fromAddress, toAddress },
+            error as Error,
+        );
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
@@ -764,9 +934,16 @@ app.post('/send-internal', async (req, res) => {
 });
 
 app.post('/get', async (req, res) => {
-    try {
-        const { address, methodId, parameters }: GetMethodRequest = req.body;
+    const { address, methodId, parameters }: GetMethodRequest = req.body;
 
+    logger.trace('Get method endpoint called', {
+        endpoint: '/get',
+        address,
+        methodId,
+        parametersLength: parameters?.length,
+    });
+
+    try {
         if (!address || methodId === undefined) {
             return res.status(400).json({ error: 'Missing address or methodId' });
         }
@@ -774,7 +951,7 @@ app.post('/get', async (req, res) => {
         const result = await daemon.callGetMethod(address, methodId, parameters);
         res.json(result);
     } catch (error) {
-        console.error('Get endpoint error:', error);
+        logger.error('Get endpoint error', { endpoint: '/get', address, methodId }, error as Error);
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
@@ -782,9 +959,14 @@ app.post('/get', async (req, res) => {
 });
 
 app.post('/info', async (req, res) => {
-    try {
-        const { address }: InfoMethodRequest = req.body;
+    const { address }: InfoMethodRequest = req.body;
 
+    logger.trace('Info endpoint called', {
+        endpoint: '/info',
+        address,
+    });
+
+    try {
         if (!address) {
             return res.status(400).json({ error: 'Missing address' });
         }
@@ -792,7 +974,7 @@ app.post('/info', async (req, res) => {
         const result = await daemon.getInfo(address);
         res.json(result);
     } catch (error) {
-        console.error('Get endpoint error:', error);
+        logger.error('Info endpoint error', { endpoint: '/info', address }, error as Error);
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
@@ -800,9 +982,15 @@ app.post('/info', async (req, res) => {
 });
 
 app.post('/rename-contract', async (req, res) => {
-    try {
-        const { address, newName }: RenameContractRequest = req.body;
+    const { address, newName }: RenameContractRequest = req.body;
 
+    logger.trace('Rename contract endpoint called', {
+        endpoint: '/rename-contract',
+        address,
+        newName,
+    });
+
+    try {
         if (!address || !newName) {
             return res.status(400).json({ error: 'Missing address or newName' });
         }
@@ -810,14 +998,22 @@ app.post('/rename-contract', async (req, res) => {
         const result = await daemon.renameContract(address, newName);
         res.json(result);
     } catch (error) {
-        console.error('Rename contract endpoint error:', error);
+        logger.error(
+            'Rename contract endpoint error',
+            { endpoint: '/rename-contract', address, newName },
+            error as Error,
+        );
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
     }
 });
 
-app.get('/contracts', async (_req, res) => {
+app.get('/contracts', async (req, res) => {
+    logger.trace('Get contracts endpoint called', {
+        endpoint: '/contracts',
+    });
+
     try {
         const result: ApiResponse<GetContractsServerData> = {
             success: true,
@@ -827,7 +1023,7 @@ app.get('/contracts', async (_req, res) => {
         };
         res.json(result);
     } catch (error) {
-        console.error('Get contracts error:', error);
+        logger.error('Get contracts endpoint error', { endpoint: '/contracts' }, error as Error);
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
@@ -835,9 +1031,14 @@ app.get('/contracts', async (_req, res) => {
 });
 
 app.delete('/contracts/:address', async (req, res) => {
-    try {
-        const { address } = req.params;
+    const { address } = req.params;
 
+    logger.trace('Delete contract endpoint called', {
+        endpoint: '/contracts/:address',
+        address,
+    });
+
+    try {
         if (!address) {
             return res.status(400).json({
                 error: 'Contract address is required',
@@ -857,14 +1058,18 @@ app.delete('/contracts/:address', async (req, res) => {
             message: 'Contract removed successfully',
         });
     } catch (error) {
-        console.error('Delete contract error:', error);
+        logger.error('Delete contract endpoint error', { endpoint: '/contracts/:address', address }, error as Error);
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
     }
 });
 
-app.get('/operations', async (_req, res) => {
+app.get('/operations', async (req, res) => {
+    logger.trace('Get operations endpoint called', {
+        endpoint: '/operations',
+    });
+
     try {
         const operationsWithResults = daemon.operations.map((operation) => ({
             ...operation,
@@ -873,10 +1078,10 @@ app.get('/operations', async (_req, res) => {
                 : undefined,
             sendResult: undefined,
         }));
-        const response: GetOperationsServerData = {operations: operationsWithResults};
+        const response: GetOperationsServerData = { operations: operationsWithResults };
         res.json(response);
     } catch (error) {
-        console.error('Get operations error:', error);
+        logger.error('Get operations endpoint error', { endpoint: '/operations' }, error as Error);
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
@@ -884,6 +1089,10 @@ app.get('/operations', async (_req, res) => {
 });
 
 app.get('/operations/latest/result', async (req, res) => {
+    logger.trace('Get latest operation result endpoint called', {
+        endpoint: '/operations/latest/result',
+    });
+
     try {
         const operationResponse = daemon.getLatestOperation();
         if (!operationResponse) {
@@ -900,7 +1109,11 @@ app.get('/operations/latest/result', async (req, res) => {
             },
         });
     } catch (error) {
-        console.error('Get latest operation result error:', error);
+        logger.error(
+            'Get latest operation result endpoint error',
+            { endpoint: '/operations/latest/result' },
+            error as Error,
+        );
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
@@ -908,9 +1121,14 @@ app.get('/operations/latest/result', async (req, res) => {
 });
 
 app.post('/restore-state', async (req, res) => {
-    try {
-        const { eventId } = req.body as { eventId: string };
+    const { eventId } = req.body as { eventId: string };
 
+    logger.trace('Restore state endpoint called', {
+        endpoint: '/restore-state',
+        eventId,
+    });
+
+    try {
         if (!eventId) {
             return res.status(400).json({
                 error: 'eventId is required',
@@ -946,16 +1164,16 @@ app.post('/restore-state', async (req, res) => {
             daemon.contracts = new Map(snapshotToLoad.contracts);
             daemon.contractInfos = new Map(snapshotToLoad.contractInfos);
             daemon.operations = [...snapshotToLoad.operations];
-            console.log(`Restored full daemon state from ${snapshotSource}`);
+            logger.info(`Restored full daemon state`, { snapshotSource, eventId });
         } else {
-            console.warn(`No snapshot found to restore state before event ${eventId}`);
+            logger.warn(`No snapshot found to restore state before event`, { eventId });
         }
 
-        console.log(`Restored state to before event ${eventId}`);
+        logger.info(`Restored state to before event`, { eventId });
 
         res.json({ success: true });
     } catch (error) {
-        console.error('Restore state error:', error);
+        logger.error('Restore state endpoint error', { endpoint: '/restore-state', eventId }, error as Error);
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
@@ -964,28 +1182,43 @@ app.post('/restore-state', async (req, res) => {
 
 // Message Template endpoints
 app.post('/message-templates', async (req, res) => {
-    try {
-        const templateData: CreateTemplateRequest = req.body;
-        if (!templateData.name || !templateData.messageFields) {
-            return res.status(400).json({ error: 'Missing required fields: name, opcode, messageFields, sendMode' });
-        }
+    const templateData: CreateTemplateRequest = req.body;
 
+    logger.trace('Create message template endpoint called', {
+        endpoint: '/message-templates',
+        name: templateData.name,
+        messageFields: templateData.messageFields,
+    });
+
+    if (!templateData.name || !templateData.messageFields) {
+        logger.error(
+            'Create message template endpoint error: Missing required fields: name, opcode, messageFields, sendMode',
+            { endpoint: '/message-templates' },
+        );
+        return res.status(400).json({ error: 'Missing required fields: name, opcode, messageFields, sendMode' });
+    }
+
+    try {
         const template = daemon.createMessageTemplate(templateData);
         res.json(template);
     } catch (error) {
-        console.error('Create template error:', error);
+        logger.error('Create message template endpoint error', { endpoint: '/message-templates' }, error as Error);
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
     }
 });
 
-app.get('/message-templates', async (_req, res) => {
+app.get('/message-templates', async (req, res) => {
+    logger.trace('Get message templates endpoint called', {
+        endpoint: '/message-templates',
+    });
+
     try {
         const templates = daemon.getMessageTemplates();
         res.json(templates);
     } catch (error) {
-        console.error('Get templates error:', error);
+        logger.error('Get message templates endpoint error', { endpoint: '/message-templates' }, error as Error);
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
@@ -993,22 +1226,36 @@ app.get('/message-templates', async (_req, res) => {
 });
 
 app.delete('/message-templates/:id', async (req, res) => {
+    const { id } = req.params;
+
+    logger.trace('Delete message template endpoint called', {
+        endpoint: '/message-templates/:id',
+        templateId: id,
+    });
+
     try {
-        const { id } = req.params;
         const success = daemon.deleteMessageTemplate(id);
         if (!success) {
             return res.status(404).json({ error: 'Template not found' });
         }
         res.json({ success: true });
     } catch (error) {
-        console.error('Delete template error:', error);
+        logger.error(
+            'Delete message template endpoint error',
+            { endpoint: '/message-templates/:id', templateId: id },
+            error as Error,
+        );
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
     }
 });
 
-app.get('/health', (_req: unknown, res: { json: (arg0: { status: string; timestamp: string }) => void }) => {
+app.get('/health', (req, res) => {
+    logger.trace('Health endpoint called', {
+        endpoint: '/health',
+    });
+
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
@@ -1036,7 +1283,10 @@ const startServer = async () => {
 };
 
 if (require.main === module) {
-    startServer().catch(console.error);
+    startServer().catch((error) => {
+        logger.fatal('Failed to start server', {}, error as Error);
+        process.exit(1);
+    });
 }
 
 export { SandboxDaemon };
