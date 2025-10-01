@@ -27,12 +27,58 @@ import {
     SendMessageResult,
     TreasuryContract,
 } from '../src';
-import {bigintToAddress} from './blockchain/web-ui-websocket';
+import { bigintToAddress } from './blockchain/web-ui-websocket';
 
 declare const base64Brand: unique symbol;
 export type Base64String = string & { readonly [base64Brand]: true };
 
 export type ExtendedGetResult = ContractGetMethodResult & { vmLogs: string };
+
+export type DeployContractServerData = {
+    readonly address: string;
+};
+
+export type SendMessageServerData = {
+    readonly txs: readonly {
+        readonly addr: string;
+        readonly vmLogs: string;
+        readonly code?: string;
+        readonly sourceMap?: object;
+    }[];
+};
+
+export type CallGetMethodServerData = {
+    readonly result?: string;
+    readonly logs?: string;
+};
+
+export type GetMessageTemplatesServerData = {
+    readonly templates: MessageTemplate[];
+};
+
+export type GetContractsServerData = {
+    readonly contracts: DeployedContractInfo[];
+};
+
+export type GetOperationsServerData = {
+    readonly operations: OperationNode[];
+};
+
+export type LoadContractInfoServerData = ContractStateInfo;
+
+export type CreateMessageTemplateServerData = MessageTemplate;
+
+type ApiResponse<T = object> = ApiResponseOk<T> | ApiResponseError;
+
+interface ApiResponseOk<T = object> {
+    readonly success: true;
+    readonly data: T;
+}
+
+interface ApiResponseError {
+    readonly success: false;
+    readonly error: string;
+}
 
 interface DeployRequest {
     readonly stateInit: {
@@ -50,7 +96,7 @@ interface MessageTemplate {
     readonly id: string;
     readonly name: string;
     readonly opcode: number; // message opcode for filtering
-    readonly messageFields: Record<string, {type: object; value: string} | undefined>;
+    readonly messageFields: Record<string, { type: object; value: string } | undefined>;
     readonly sendMode: number;
     readonly value: string; // nano TON amount
     readonly createdAt: string; // ISO date string
@@ -60,7 +106,7 @@ interface MessageTemplate {
 interface CreateTemplateRequest {
     readonly name: string;
     readonly opcode: number;
-    readonly messageFields: Record<string, {type: object; value: string} | undefined>;
+    readonly messageFields: Record<string, { type: object; value: string } | undefined>;
     readonly sendMode: number;
     readonly value: string; // nano TON amount
     readonly description?: string;
@@ -107,10 +153,6 @@ export interface OperationNode {
     readonly sendResult?: SendMessageResult;
 }
 
-interface OperationsResponse {
-    readonly operations: OperationNode[];
-}
-
 class DaemonContract implements Contract {
     constructor(
         public readonly address: Address,
@@ -118,8 +160,7 @@ class DaemonContract implements Contract {
         public readonly sourceMap: object | undefined,
         public readonly name?: string,
         public readonly abi?: object,
-    ) {
-    }
+    ) {}
 
     public async send(
         provider: ContractProvider,
@@ -128,10 +169,14 @@ class DaemonContract implements Contract {
         body: Cell,
         sendMode: number,
     ) {
-        await provider.internal(via, {...args, sendMode, body});
+        await provider.internal(via, { ...args, sendMode, body });
     }
 
-    public async getAny(provider: ContractProvider, id: number, parametersBase64: string): Promise<[TupleReader, string]> {
+    public async getAny(
+        provider: ContractProvider,
+        id: number,
+        parametersBase64: string,
+    ): Promise<[TupleReader, string]> {
         let parameters: TupleItem[] = [];
 
         try {
@@ -141,30 +186,24 @@ class DaemonContract implements Contract {
             console.warn('Failed to parse parameters:', error);
         }
 
-        console.log("Call get method with id", id, "and parameters:", parameters, "")
+        console.log('Call get method with id', id, 'and parameters:', parameters, '');
         const res = (await provider.get(id, parameters)) as ExtendedGetResult;
         return [res.stack, res.vmLogs];
     }
 }
 
 export interface BlockchainDaemonSnapshot {
-    readonly blockchain: BlockchainSnapshot
-    readonly contracts: Map<string, SandboxContract<DaemonContract>>
-    readonly contractInfos: Map<string, DeployedContractInfo>
-    readonly operations: OperationNode[]
+    readonly blockchain: BlockchainSnapshot;
+    readonly contracts: Map<string, SandboxContract<DaemonContract>>;
+    readonly contractInfos: Map<string, DeployedContractInfo>;
+    readonly operations: OperationNode[];
 }
 
 export interface SendMessageTransactionInfo {
-    readonly addr?: string;
-    readonly vmLogs?: string;
-    readonly code?: string;
+    readonly addr: string;
+    readonly vmLogs: string;
+    readonly code: string;
     readonly sourceMap?: object;
-}
-
-export interface SendMessageResponse {
-    readonly success: boolean;
-    readonly txs?: readonly SendMessageTransactionInfo[];
-    readonly error?: string;
 }
 
 export interface DeployedContractInfo {
@@ -193,7 +232,7 @@ class SandboxDaemon {
     public messageTemplates: Map<string, MessageTemplate> = new Map();
 
     public static async create(): Promise<SandboxDaemon> {
-        const blockchain = await Blockchain.create({webUI: true});
+        const blockchain = await Blockchain.create({ webUI: true });
         blockchain.verbosity.print = false;
         blockchain.verbosity.vmLogs = 'vm_logs_verbose';
 
@@ -259,10 +298,7 @@ class SandboxDaemon {
         sourceMap: object | undefined,
         abi: object | undefined,
         sourceUri: string,
-    ): Promise<{
-        address: string;
-        success: boolean;
-    }> {
+    ): Promise<ApiResponse<DeployContractServerData>> {
         try {
             const address = contractAddress(0, stateInit);
             const contract = new DaemonContract(address, stateInit, sourceMap, name, abi);
@@ -270,7 +306,7 @@ class SandboxDaemon {
 
             await openContract.send(
                 this.treasury.getSender(),
-                {value: valueAmount},
+                { value: valueAmount },
                 new Cell(),
                 0, // TODO
             );
@@ -293,8 +329,10 @@ class SandboxDaemon {
             });
 
             return {
-                address: address.toString(),
                 success: true,
+                data: {
+                    address: address.toString(),
+                },
             };
         } catch (error) {
             console.error('Deploy error:', error);
@@ -307,8 +345,8 @@ class SandboxDaemon {
             });
 
             return {
-                address: '',
                 success: false,
+                error: error instanceof Error ? error.message : 'Unknown error',
             };
         }
     }
@@ -323,16 +361,13 @@ class SandboxDaemon {
             code: code,
             sourceMap: contract?.sourceMap,
         };
-    };
+    }
 
-    public async sendExternalMessage(
-        address: string,
-        message: Cell,
-    ): Promise<SendMessageResponse> {
+    public async sendExternalMessage(address: string, message: Cell): Promise<ApiResponse<SendMessageServerData>> {
         try {
             const contract = this.contracts.get(address);
             if (!contract) {
-                return {success: false, error: 'Contract not found'};
+                return { success: false, error: 'Contract not found' };
             }
 
             const result = await this.blockchain.sendMessage(
@@ -354,7 +389,9 @@ class SandboxDaemon {
 
             return {
                 success: true,
-                txs: result.transactions.slice(1).map(tx => this.blockchainTxToInfo(tx)),
+                data: {
+                    txs: result.transactions.slice(1).map((tx) => this.blockchainTxToInfo(tx)),
+                },
             };
         } catch (error) {
             console.error('Send message error:', error);
@@ -381,22 +418,22 @@ class SandboxDaemon {
         message: Cell,
         sendMode: number,
         value: bigint,
-    ): Promise<SendMessageResponse> {
+    ): Promise<ApiResponse<SendMessageServerData>> {
         try {
             const fromContract =
                 fromAddress === this.treasury.address.toString() ? this.treasury : this.contracts.get(fromAddress);
             if (!fromContract) {
-                return {success: false, error: 'From contract not found'};
+                return { success: false, error: 'From contract not found' };
             }
 
             const toContract = this.contracts.get(toAddress);
             if (!toContract) {
-                return {success: false, error: 'To contract not found'};
+                return { success: false, error: 'To contract not found' };
             }
 
             const fromContractSender = this.blockchain.sender(fromContract.address);
 
-            const result = await toContract.send(fromContractSender, {value, bounce: false}, message, sendMode);
+            const result = await toContract.send(fromContractSender, { value, bounce: false }, message, sendMode);
 
             this.addOperation({
                 type: 'send-internal',
@@ -408,7 +445,9 @@ class SandboxDaemon {
 
             return {
                 success: true,
-                txs: result.transactions.slice(0, -1).map(tx => this.blockchainTxToInfo(tx)),
+                data: {
+                    txs: result.transactions.slice(0, -1).map((tx) => this.blockchainTxToInfo(tx)),
+                },
             };
         } catch (error) {
             console.error('Send internal message error:', error);
@@ -432,16 +471,11 @@ class SandboxDaemon {
         address: string,
         methodId: number,
         parametersBase64: string,
-    ): Promise<{
-        success: boolean;
-        result?: string;
-        logs?: string;
-        error?: string;
-    }> {
+    ): Promise<ApiResponse<CallGetMethodServerData>> {
         try {
             const contract = this.contracts.get(address);
             if (!contract) {
-                return {success: false, error: 'Contract not found'};
+                return { success: false, error: 'Contract not found' };
             }
 
             const [stack, logs] = await contract.getAny(methodId, parametersBase64);
@@ -450,8 +484,10 @@ class SandboxDaemon {
             const items = stack.items as TupleItem[];
             return {
                 success: true,
-                result: serializeTuple(items).toBoc().toString('base64'),
-                logs,
+                data: {
+                    result: serializeTuple(items).toBoc().toString('base64'),
+                    logs,
+                },
             };
         } catch (error) {
             console.error('Get method error:', error);
@@ -477,11 +513,7 @@ class SandboxDaemon {
         return true;
     }
 
-    public async getInfo(address: string): Promise<{
-        success: boolean;
-        result?: ContractStateInfo;
-        error?: string;
-    }> {
+    public async getInfo(address: string): Promise<ApiResponse<LoadContractInfoServerData>> {
         try {
             if (address === this.treasury.address.toString()) {
                 const blockchainContract = await this.blockchain.getContract(this.treasury.address);
@@ -496,18 +528,18 @@ class SandboxDaemon {
 
                 return {
                     success: true,
-                    result: {
+                    data: {
                         account: accountCell.toBoc().toString('hex'),
                         stateInit,
                         abi: undefined,
-                        sourceUri: "treasury.func",
+                        sourceUri: 'treasury.func',
                     },
                 };
             }
 
             const contract = this.contracts.get(address);
             if (!contract) {
-                return {success: false, error: 'Contract not found'};
+                return { success: false, error: 'Contract not found' };
             }
 
             const blockchainContract = await this.blockchain.getContract(contract.address);
@@ -526,11 +558,11 @@ class SandboxDaemon {
             }
 
             const abi = contractInfo?.abi;
-            const sourceUri = contractInfo?.sourceUri ?? "unknown.tolk";
+            const sourceUri = contractInfo?.sourceUri ?? 'unknown.tolk';
 
             return {
                 success: true,
-                result: {
+                data: {
                     account: accountCell.toBoc().toString('hex'),
                     stateInit,
                     abi,
@@ -546,28 +578,23 @@ class SandboxDaemon {
         }
     }
 
-    public async renameContract(
-        address: string,
-        newName: string,
-    ): Promise<{
-        success: boolean;
-        error?: string;
-    }> {
+    public async renameContract(address: string, newName: string): Promise<ApiResponse> {
         try {
             const contractInfo = this.contractInfos.get(address);
             if (!contractInfo) {
-                return {success: false, error: 'Contract not found'};
+                return { success: false, error: 'Contract not found' };
             }
 
             this.contractInfos.set(address, {
                 ...contractInfo,
                 name: newName,
-            })
+            });
 
             console.log(`Renamed contract ${address} to "${newName}"`);
 
             return {
                 success: true,
+                data: {},
             };
         } catch (error) {
             console.error('Rename contract error:', error);
@@ -578,7 +605,9 @@ class SandboxDaemon {
         }
     }
 
-    public createMessageTemplate(templateData: Omit<MessageTemplate, 'id' | 'createdAt'>): MessageTemplate {
+    public createMessageTemplate(
+        templateData: Omit<MessageTemplate, 'id' | 'createdAt'>,
+    ): ApiResponse<CreateMessageTemplateServerData> {
         const id = `template_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
         const template: MessageTemplate = {
             id,
@@ -592,19 +621,28 @@ class SandboxDaemon {
         };
         this.messageTemplates.set(id, template);
         console.log(`Created message template: ${template.name} (${id})`);
-        return template;
+        return {
+            success: true,
+            data: template,
+        };
     }
 
-    public getMessageTemplates(): MessageTemplate[] {
-        return [...this.messageTemplates.values()];
+    public getMessageTemplates(): ApiResponse<GetMessageTemplatesServerData> {
+        return {
+            success: true,
+            data: {
+                templates: [...this.messageTemplates.values()],
+            },
+        };
     }
 
-    public deleteMessageTemplate(id: string): boolean {
+    public deleteMessageTemplate(id: string): ApiResponse {
         const deleted = this.messageTemplates.delete(id);
         if (deleted) {
             console.log(`Deleted message template: ${id}`);
+            return { success: true, data: {} };
         }
-        return deleted;
+        return { success: false, error: 'Template not found' };
     }
 
     public getLatestOperation(): OperationNode | undefined {
@@ -634,7 +672,7 @@ class SandboxDaemon {
 
                 return {
                     transaction: tx,
-                    fields: fieldsToSave.reduce((acc: any, f) => {
+                    fields: fieldsToSave.reduce((acc: object, f) => {
                         // @ts-ignore
                         acc[f] = t[f];
                         return acc;
@@ -652,7 +690,7 @@ class SandboxDaemon {
 }
 
 const app = express();
-app.use(express.json({limit: '10mb'}));
+app.use(express.json({ limit: '10mb' }));
 
 let daemon: SandboxDaemon;
 
@@ -663,10 +701,10 @@ const initDaemon = async () => {
 
 app.post('/deploy', async (req, res) => {
     try {
-        const {stateInit, value, name, sourceMap, abi, sourceUri}: DeployRequest = req.body;
+        const { stateInit, value, name, sourceMap, abi, sourceUri }: DeployRequest = req.body;
 
         if (!stateInit?.code || !stateInit?.data) {
-            return res.status(400).json({error: 'Missing stateInit.code or stateInit.data'});
+            return res.status(400).json({ error: 'Missing stateInit.code or stateInit.data' });
         }
 
         const init: StateInit = {
@@ -674,14 +712,7 @@ app.post('/deploy', async (req, res) => {
             data: Cell.fromBase64(stateInit.data),
         };
 
-        const result = await daemon.deployContract(
-            name,
-            init,
-            BigInt(value),
-            sourceMap,
-            abi,
-            sourceUri,
-        );
+        const result = await daemon.deployContract(name, init, BigInt(value), sourceMap, abi, sourceUri);
         res.json(result);
     } catch (error) {
         console.error('Deploy endpoint error:', error);
@@ -693,10 +724,10 @@ app.post('/deploy', async (req, res) => {
 
 app.post('/send-external', async (req, res) => {
     try {
-        const {address, message}: SendExternalMessageRequest = req.body;
+        const { address, message }: SendExternalMessageRequest = req.body;
 
         if (!address || !message) {
-            return res.status(400).json({error: 'Missing address or message'});
+            return res.status(400).json({ error: 'Missing address or message' });
         }
 
         const messageCell = Cell.fromBase64(message);
@@ -713,10 +744,10 @@ app.post('/send-external', async (req, res) => {
 
 app.post('/send-internal', async (req, res) => {
     try {
-        const {fromAddress, toAddress, message, sendMode, value}: SendInternalMessageRequest = req.body;
+        const { fromAddress, toAddress, message, sendMode, value }: SendInternalMessageRequest = req.body;
 
         if (!fromAddress || !toAddress || !message) {
-            return res.status(400).json({error: 'Missing fromAddress, toAddress or message'});
+            return res.status(400).json({ error: 'Missing fromAddress, toAddress or message' });
         }
 
         const messageCell = Cell.fromBase64(message);
@@ -734,10 +765,10 @@ app.post('/send-internal', async (req, res) => {
 
 app.post('/get', async (req, res) => {
     try {
-        const {address, methodId, parameters}: GetMethodRequest = req.body;
+        const { address, methodId, parameters }: GetMethodRequest = req.body;
 
         if (!address || methodId === undefined) {
-            return res.status(400).json({error: 'Missing address or methodId'});
+            return res.status(400).json({ error: 'Missing address or methodId' });
         }
 
         const result = await daemon.callGetMethod(address, methodId, parameters);
@@ -752,10 +783,10 @@ app.post('/get', async (req, res) => {
 
 app.post('/info', async (req, res) => {
     try {
-        const {address}: InfoMethodRequest = req.body;
+        const { address }: InfoMethodRequest = req.body;
 
         if (!address) {
-            return res.status(400).json({error: 'Missing address'});
+            return res.status(400).json({ error: 'Missing address' });
         }
 
         const result = await daemon.getInfo(address);
@@ -770,10 +801,10 @@ app.post('/info', async (req, res) => {
 
 app.post('/rename-contract', async (req, res) => {
     try {
-        const {address, newName}: RenameContractRequest = req.body;
+        const { address, newName }: RenameContractRequest = req.body;
 
         if (!address || !newName) {
-            return res.status(400).json({error: 'Missing address or newName'});
+            return res.status(400).json({ error: 'Missing address or newName' });
         }
 
         const result = await daemon.renameContract(address, newName);
@@ -788,8 +819,13 @@ app.post('/rename-contract', async (req, res) => {
 
 app.get('/contracts', async (_req, res) => {
     try {
-        const contracts = daemon.getDeployedContracts();
-        res.json({contracts});
+        const result: ApiResponse<GetContractsServerData> = {
+            success: true,
+            data: {
+                contracts: daemon.getDeployedContracts(),
+            },
+        };
+        res.json(result);
     } catch (error) {
         console.error('Get contracts error:', error);
         res.status(500).json({
@@ -800,7 +836,7 @@ app.get('/contracts', async (_req, res) => {
 
 app.delete('/contracts/:address', async (req, res) => {
     try {
-        const {address} = req.params;
+        const { address } = req.params;
 
         if (!address) {
             return res.status(400).json({
@@ -837,7 +873,7 @@ app.get('/operations', async (_req, res) => {
                 : undefined,
             sendResult: undefined,
         }));
-        const response: OperationsResponse = {operations: operationsWithResults};
+        const response: GetOperationsServerData = {operations: operationsWithResults};
         res.json(response);
     } catch (error) {
         console.error('Get operations error:', error);
@@ -849,20 +885,19 @@ app.get('/operations', async (_req, res) => {
 
 app.get('/operations/latest/result', async (req, res) => {
     try {
-        const operation = daemon.getLatestOperation();
-        if (!operation) {
-            console.log(daemon.operations)
-            return res.status(404).json({error: 'No operations found'});
+        const operationResponse = daemon.getLatestOperation();
+        if (!operationResponse) {
+            return res.status(404).json({ error: 'No operations found' });
         }
 
         const resultString = daemon.getLatestOperationResultString();
 
         res.json({
             operation: {
-                ...operation,
+                ...operationResponse,
                 resultString,
-                sendResult: undefined, // Remove sendResult for client
-            }
+                sendResult: undefined, // Remove sendResult for a client
+            },
         });
     } catch (error) {
         console.error('Get latest operation result error:', error);
@@ -874,7 +909,7 @@ app.get('/operations/latest/result', async (req, res) => {
 
 app.post('/restore-state', async (req, res) => {
     try {
-        const {eventId} = req.body as { eventId: string };
+        const { eventId } = req.body as { eventId: string };
 
         if (!eventId) {
             return res.status(400).json({
@@ -889,8 +924,7 @@ app.post('/restore-state', async (req, res) => {
             });
         }
 
-        // Find the previous successful operation that has a snapshot
-        let snapshotToLoad: any = null;
+        let snapshotToLoad: BlockchainDaemonSnapshot | undefined = undefined;
         let snapshotSource = '';
 
         for (let i = eventIndex - 1; i >= 0; i--) {
@@ -902,14 +936,12 @@ app.post('/restore-state', async (req, res) => {
             }
         }
 
-        // If no previous operation snapshot found, use initial snapshot
         if (!snapshotToLoad && daemon.snapshots.has('initial')) {
             snapshotToLoad = daemon.snapshots.get('initial');
             snapshotSource = 'initial state';
         }
 
         if (snapshotToLoad) {
-            // Restore full daemon state from snapshot
             daemon.blockchain.loadFrom(snapshotToLoad.blockchain);
             daemon.contracts = new Map(snapshotToLoad.contracts);
             daemon.contractInfos = new Map(snapshotToLoad.contractInfos);
@@ -919,11 +951,9 @@ app.post('/restore-state', async (req, res) => {
             console.warn(`No snapshot found to restore state before event ${eventId}`);
         }
 
-        // Note: Operations are already restored from snapshot, no need to manually splice
-
         console.log(`Restored state to before event ${eventId}`);
 
-        res.json({success: true});
+        res.json({ success: true });
     } catch (error) {
         console.error('Restore state error:', error);
         res.status(500).json({
@@ -936,11 +966,8 @@ app.post('/restore-state', async (req, res) => {
 app.post('/message-templates', async (req, res) => {
     try {
         const templateData: CreateTemplateRequest = req.body;
-        if (
-            !templateData.name ||
-            !templateData.messageFields
-        ) {
-            return res.status(400).json({error: 'Missing required fields: name, opcode, messageFields, sendMode'});
+        if (!templateData.name || !templateData.messageFields) {
+            return res.status(400).json({ error: 'Missing required fields: name, opcode, messageFields, sendMode' });
         }
 
         const template = daemon.createMessageTemplate(templateData);
@@ -956,7 +983,7 @@ app.post('/message-templates', async (req, res) => {
 app.get('/message-templates', async (_req, res) => {
     try {
         const templates = daemon.getMessageTemplates();
-        res.json({templates});
+        res.json(templates);
     } catch (error) {
         console.error('Get templates error:', error);
         res.status(500).json({
@@ -967,12 +994,12 @@ app.get('/message-templates', async (_req, res) => {
 
 app.delete('/message-templates/:id', async (req, res) => {
     try {
-        const {id} = req.params;
+        const { id } = req.params;
         const success = daemon.deleteMessageTemplate(id);
         if (!success) {
-            return res.status(404).json({error: 'Template not found'});
+            return res.status(404).json({ error: 'Template not found' });
         }
-        res.json({success: true});
+        res.json({ success: true });
     } catch (error) {
         console.error('Delete template error:', error);
         res.status(500).json({
@@ -981,8 +1008,8 @@ app.delete('/message-templates/:id', async (req, res) => {
     }
 });
 
-app.get('/health', (_req: any, res: { json: (arg0: { status: string; timestamp: string }) => void }) => {
-    res.json({status: 'ok', timestamp: new Date().toISOString()});
+app.get('/health', (_req: unknown, res: { json: (arg0: { status: string; timestamp: string }) => void }) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1012,4 +1039,4 @@ if (require.main === module) {
     startServer().catch(console.error);
 }
 
-export {SandboxDaemon};
+export { SandboxDaemon };
