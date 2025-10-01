@@ -14,7 +14,6 @@ import {
     StateInit,
     storeShardAccount,
     storeTransaction,
-    toNano,
     Transaction,
     TupleItem,
     TupleReader,
@@ -51,7 +50,7 @@ interface MessageTemplate {
     readonly id: string;
     readonly name: string;
     readonly opcode: number; // message opcode for filtering
-    readonly messageBody: Base64String;
+    readonly messageFields: Record<string, {type: object; value: string} | undefined>;
     readonly sendMode: number;
     readonly value: string; // nano TON amount
     readonly createdAt: string; // ISO date string
@@ -61,15 +60,9 @@ interface MessageTemplate {
 interface CreateTemplateRequest {
     readonly name: string;
     readonly opcode: number;
-    readonly messageBody: Base64String;
+    readonly messageFields: Record<string, {type: object; value: string} | undefined>;
     readonly sendMode: number;
     readonly value: string; // nano TON amount
-    readonly description?: string;
-}
-
-interface UpdateTemplateRequest {
-    readonly id: string;
-    readonly name?: string;
     readonly description?: string;
 }
 
@@ -83,7 +76,7 @@ interface SendInternalMessageRequest {
     readonly toAddress: string;
     readonly message: Base64String; // base64 Cell
     readonly sendMode: number;
-    readonly value?: string;
+    readonly value: string;
 }
 
 interface GetMethodRequest {
@@ -119,18 +112,13 @@ interface OperationsResponse {
 }
 
 class DaemonContract implements Contract {
-    public readonly address: Address;
-    public readonly init: StateInit;
-    public readonly sourceMap?: object;
-    public readonly name?: string;
-    public readonly abi?: object;
-
-    constructor(address: Address, init: StateInit, sourceMap: object | undefined, name?: string, abi?: object) {
-        this.address = address;
-        this.init = init;
-        this.sourceMap = sourceMap;
-        this.name = name;
-        this.abi = abi;
+    constructor(
+        public readonly address: Address,
+        public readonly init: StateInit,
+        public readonly sourceMap: object | undefined,
+        public readonly name?: string,
+        public readonly abi?: object,
+    ) {
     }
 
     public async send(
@@ -596,7 +584,7 @@ class SandboxDaemon {
             id,
             name: templateData.name,
             opcode: templateData.opcode,
-            messageBody: templateData.messageBody,
+            messageFields: templateData.messageFields,
             sendMode: templateData.sendMode,
             value: templateData.value,
             description: templateData.description,
@@ -609,20 +597,6 @@ class SandboxDaemon {
 
     public getMessageTemplates(): MessageTemplate[] {
         return [...this.messageTemplates.values()];
-    }
-
-    public getMessageTemplate(id: string): MessageTemplate | undefined {
-        return this.messageTemplates.get(id);
-    }
-
-    public updateMessageTemplate(id: string, updates: Partial<Pick<MessageTemplate, 'name' | 'description'>>): boolean {
-        const template = this.messageTemplates.get(id);
-        if (!template) return false;
-
-        const updatedTemplate = {...template, ...updates};
-        this.messageTemplates.set(id, updatedTemplate);
-        console.log(`Updated message template: ${updatedTemplate.name} (${id})`);
-        return true;
     }
 
     public deleteMessageTemplate(id: string): boolean {
@@ -703,7 +677,7 @@ app.post('/deploy', async (req, res) => {
         const result = await daemon.deployContract(
             name,
             init,
-            toNano(value),
+            BigInt(value),
             sourceMap,
             abi,
             sourceUri,
@@ -746,7 +720,7 @@ app.post('/send-internal', async (req, res) => {
         }
 
         const messageCell = Cell.fromBase64(message);
-        const valueAmount = value ? toNano(value) : toNano('1');
+        const valueAmount = BigInt(value);
 
         const result = await daemon.sendInternalMessage(fromAddress, toAddress, messageCell, sendMode, valueAmount);
         res.json(result);
@@ -964,9 +938,9 @@ app.post('/message-templates', async (req, res) => {
         const templateData: CreateTemplateRequest = req.body;
         if (
             !templateData.name ||
-            !templateData.messageBody
+            !templateData.messageFields
         ) {
-            return res.status(400).json({error: 'Missing required fields: name, opcode, messageBody, sendMode'});
+            return res.status(400).json({error: 'Missing required fields: name, opcode, messageFields, sendMode'});
         }
 
         const template = daemon.createMessageTemplate(templateData);
@@ -985,39 +959,6 @@ app.get('/message-templates', async (_req, res) => {
         res.json({templates});
     } catch (error) {
         console.error('Get templates error:', error);
-        res.status(500).json({
-            error: error instanceof Error ? error.message : 'Internal server error',
-        });
-    }
-});
-
-app.get('/message-templates/:id', async (req, res) => {
-    try {
-        const {id} = req.params;
-        const template = daemon.getMessageTemplate(id);
-        if (!template) {
-            return res.status(404).json({error: 'Template not found'});
-        }
-        res.json(template);
-    } catch (error) {
-        console.error('Get template error:', error);
-        res.status(500).json({
-            error: error instanceof Error ? error.message : 'Internal server error',
-        });
-    }
-});
-
-app.put('/message-templates/:id', async (req, res) => {
-    try {
-        const {id} = req.params;
-        const updates: UpdateTemplateRequest = req.body;
-        const success = daemon.updateMessageTemplate(id, updates);
-        if (!success) {
-            return res.status(404).json({error: 'Template not found'});
-        }
-        res.json({success: true});
-    } catch (error) {
-        console.error('Update template error:', error);
         res.status(500).json({
             error: error instanceof Error ? error.message : 'Internal server error',
         });
@@ -1062,8 +1003,6 @@ const startServer = async () => {
         console.log(`  GET /operations/latest/result - Get latest operation result`);
         console.log(`  POST /message-templates - Create message template`);
         console.log(`  GET /message-templates - Get all message templates`);
-        console.log(`  GET /message-templates/:id - Get message template by ID`);
-        console.log(`  PUT /message-templates/:id - Update message template`);
         console.log(`  DELETE /message-templates/:id - Delete message template`);
         console.log(`  GET /health - Health check`);
     });
