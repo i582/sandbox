@@ -287,6 +287,9 @@ export interface OperationNode {
     readonly fromContract?: string;
     readonly toContract?: string;
     readonly sendResult?: SendMessageResult;
+    readonly sendMode?: number;
+    readonly value?: string;
+    readonly messageBody?: string;
 }
 
 class DaemonContract implements Contract {
@@ -446,7 +449,7 @@ class SandboxDaemon {
             const contract = new DaemonContract(address, stateInit, sourceMap, name, abi);
             const openContract = this.blockchain.openContract(contract, name);
 
-            await openContract.send(
+            const deployResult = await openContract.send(
                 this.treasury.getSender(),
                 { value: valueAmount },
                 new Cell(),
@@ -468,6 +471,7 @@ class SandboxDaemon {
                 contractAddress: address.toString(),
                 details: `Deployed ${name} with initial value`,
                 success: true,
+                sendResult: deployResult,
             });
 
             return {
@@ -524,9 +528,10 @@ class SandboxDaemon {
                 type: 'send-external',
                 contractName: contractInfo?.name,
                 contractAddress: address,
-                details: `External message sent to ${contractInfo?.name || address}`,
                 success: true,
                 sendResult: result,
+                toContract: address,
+                messageBody: message.toBoc().toString('base64'),
             });
 
             return {
@@ -547,8 +552,9 @@ class SandboxDaemon {
                 type: 'send-external',
                 contractName: contractInfo?.name,
                 contractAddress: address,
-                details: `Failed to send external message to ${contractInfo?.name || address}: ${error instanceof Error ? error.message : 'Unknown error'}`,
                 success: false,
+                toContract: address,
+                messageBody: message.toBoc().toString('base64'),
             });
 
             return {
@@ -587,6 +593,9 @@ class SandboxDaemon {
                 toContract: toAddress,
                 success: true,
                 sendResult: result,
+                sendMode: sendMode,
+                value: value.toString(),
+                messageBody: message.toBoc().toString('base64'),
             });
 
             return {
@@ -604,6 +613,9 @@ class SandboxDaemon {
                 toContract: toAddress,
                 details: error instanceof Error ? error.message : 'Unknown error',
                 success: false,
+                sendMode: sendMode,
+                value: value.toString(),
+                messageBody: message.toBoc().toString('base64'),
             });
 
             return {
