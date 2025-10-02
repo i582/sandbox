@@ -82,7 +82,7 @@ class Logger {
                 return value.toString();
             }
             return value;
-        }
+        };
 
         const timestamp = new Date(entry.timestamp).toISOString();
         let logLine = `[${timestamp}] ${entry.level.toUpperCase().padEnd(5)} ${entry.message}`;
@@ -338,11 +338,23 @@ class DaemonContract implements Contract {
     }
 }
 
+export type OperationTraceItem =
+    | { readonly type: 'deploy'; readonly data: DeployRequest }
+    | { readonly type: 'send-external'; readonly data: SendExternalMessageRequest }
+    | { readonly type: 'send-internal'; readonly data: SendInternalMessageRequest }
+    | { readonly type: 'rename-contract'; readonly data: RenameContractRequest };
+
 export interface BlockchainDaemonSnapshot {
     readonly blockchain: BlockchainSnapshot;
     readonly contracts: Map<string, SandboxContract<DaemonContract>>;
     readonly contractInfos: Map<string, DeployedContractInfo>;
     readonly operations: OperationNode[];
+}
+
+export interface OperationTrace {
+    readonly operations: OperationTraceItem[];
+    readonly timestamp: string;
+    readonly version: string;
 }
 
 export interface SendMessageTransactionInfo {
@@ -376,6 +388,7 @@ class SandboxDaemon {
     public operations: OperationNode[] = [];
     public snapshots: Map<string, BlockchainDaemonSnapshot> = new Map();
     public messageTemplates: Map<string, MessageTemplate> = new Map();
+    public operationsTrace: OperationTraceItem[] = [];
 
     public static async create(): Promise<SandboxDaemon> {
         const blockchain = await Blockchain.create({ webUI: true });
@@ -412,12 +425,20 @@ class SandboxDaemon {
         }
     }
 
-    private addOperation(operation: Omit<OperationNode, 'id' | 'timestamp'>): void {
+    private addOperation(operation: Omit<OperationNode, 'id' | 'timestamp'>, traceItem?: OperationTraceItem): void {
         const newOperation: OperationNode = {
             id: `op-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
             timestamp: new Date().toISOString(),
             ...operation,
         };
+
+        if (traceItem) {
+            this.operationsTrace.push(traceItem);
+            logger.debug(`Saved trace item for operation ${newOperation.type}`, {
+                operationType: newOperation.type,
+                traceType: traceItem.type,
+            });
+        }
 
         if (operation.success) {
             try {
@@ -472,14 +493,32 @@ class SandboxDaemon {
                 sourceUri: sourceUri,
             });
 
-            this.addOperation({
+            const traceItem: OperationTraceItem = {
                 type: 'deploy',
-                contractName: name,
-                contractAddress: address.toString(),
-                details: `Deployed ${name} with initial value`,
-                success: true,
-                sendResult: deployResult,
-            });
+                data: {
+                    stateInit: {
+                        code: (stateInit.code ?? new Cell()).toBoc().toString('base64') as Base64String,
+                        data: (stateInit.data ?? new Cell()).toBoc().toString('base64') as Base64String,
+                    },
+                    value: valueAmount.toString(),
+                    name,
+                    sourceMap,
+                    abi,
+                    sourceUri,
+                },
+            };
+
+            this.addOperation(
+                {
+                    type: 'deploy',
+                    contractName: name,
+                    contractAddress: address.toString(),
+                    details: `Deployed ${name} with initial value`,
+                    success: true,
+                    sendResult: deployResult,
+                },
+                traceItem,
+            );
 
             return {
                 success: true,
@@ -531,15 +570,26 @@ class SandboxDaemon {
             );
 
             const contractInfo = this.contractInfos.get(address);
-            this.addOperation({
+            const traceItem: OperationTraceItem = {
                 type: 'send-external',
-                contractName: contractInfo?.name,
-                contractAddress: address,
-                success: true,
-                sendResult: result,
-                toContract: address,
-                messageBody: message.toBoc().toString('base64'),
-            });
+                data: {
+                    address,
+                    message: message.toBoc().toString('base64') as Base64String,
+                },
+            };
+
+            this.addOperation(
+                {
+                    type: 'send-external',
+                    contractName: contractInfo?.name,
+                    contractAddress: address,
+                    success: true,
+                    sendResult: result,
+                    toContract: address,
+                    messageBody: message.toBoc().toString('base64'),
+                },
+                traceItem,
+            );
 
             return {
                 success: true,
@@ -594,16 +644,30 @@ class SandboxDaemon {
 
             const result = await toContract.send(fromContractSender, { value, bounce: false }, message, sendMode);
 
-            this.addOperation({
+            const traceItem: OperationTraceItem = {
                 type: 'send-internal',
-                fromContract: fromAddress,
-                toContract: toAddress,
-                success: true,
-                sendResult: result,
-                sendMode: sendMode,
-                value: value.toString(),
-                messageBody: message.toBoc().toString('base64'),
-            });
+                data: {
+                    fromAddress,
+                    toAddress,
+                    message: message.toBoc().toString('base64') as Base64String,
+                    sendMode,
+                    value: value.toString(),
+                },
+            };
+
+            this.addOperation(
+                {
+                    type: 'send-internal',
+                    fromContract: fromAddress,
+                    toContract: toAddress,
+                    success: true,
+                    sendResult: result,
+                    sendMode: sendMode,
+                    value: value.toString(),
+                    messageBody: message.toBoc().toString('base64'),
+                },
+                traceItem,
+            );
 
             return {
                 success: true,
@@ -851,6 +915,105 @@ class SandboxDaemon {
             }),
         };
         return JSON.stringify(dump, null, 2);
+    }
+
+    public exportTrace(): OperationTrace {
+        return {
+            operations: [...this.operationsTrace],
+            timestamp: new Date().toISOString(),
+            version: '1.0',
+        };
+    }
+
+    public async importTrace(trace: OperationTrace): Promise<ApiResponse> {
+        try {
+            logger.info(`Starting import of ${trace.operations.length} operations from trace`);
+
+            const freshDaemon = await SandboxDaemon.create();
+
+            for (const operation of trace.operations) {
+                logger.debug(`Executing trace operation: ${operation.type}`);
+
+                switch (operation.type) {
+                    case 'deploy': {
+                        const deployData = operation.data;
+                        const init: StateInit = {
+                            code: Cell.fromBase64(deployData.stateInit.code),
+                            data: Cell.fromBase64(deployData.stateInit.data),
+                        };
+
+                        const result = await freshDaemon.deployContract(
+                            deployData.name,
+                            init,
+                            BigInt(deployData.value),
+                            deployData.sourceMap,
+                            deployData.abi,
+                            deployData.sourceUri,
+                        );
+
+                        if (!result.success) {
+                            throw new Error(`Deploy failed: ${result.error}`);
+                        }
+                        break;
+                    }
+
+                    case 'send-external': {
+                        const sendData = operation.data;
+                        const messageCell = Cell.fromBase64(sendData.message);
+
+                        const result = await freshDaemon.sendExternalMessage(sendData.address, messageCell);
+                        if (!result.success) {
+                            throw new Error(`Send external message failed: ${result.error}`);
+                        }
+                        break;
+                    }
+
+                    case 'send-internal': {
+                        const sendData = operation.data;
+                        const messageCell = Cell.fromBase64(sendData.message);
+
+                        const result = await freshDaemon.sendInternalMessage(
+                            sendData.fromAddress,
+                            sendData.toAddress,
+                            messageCell,
+                            sendData.sendMode,
+                            BigInt(sendData.value),
+                        );
+
+                        if (!result.success) {
+                            throw new Error(`Send internal message failed: ${result.error}`);
+                        }
+                        break;
+                    }
+
+                    case 'rename-contract': {
+                        const renameData = operation.data;
+                        const result = await freshDaemon.renameContract(renameData.address, renameData.newName);
+                        if (!result.success) {
+                            throw new Error(`Rename contract failed: ${result.error}`);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            this.blockchain = freshDaemon.blockchain;
+            this.contracts = freshDaemon.contracts;
+            this.contractInfos = freshDaemon.contractInfos;
+            this.operations = freshDaemon.operations;
+            this.operationsTrace = freshDaemon.operationsTrace;
+            this.snapshots = freshDaemon.snapshots;
+            this.messageTemplates = freshDaemon.messageTemplates;
+
+            logger.info(`Successfully imported trace with ${trace.operations.length} operations`);
+            return { success: true, data: {} };
+        } catch (error) {
+            logger.error('Failed to import trace', {}, error as Error);
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : 'Unknown error during trace import',
+            };
+        }
     }
 }
 
@@ -1270,6 +1433,48 @@ app.delete('/message-templates/:id', async (req, res) => {
     }
 });
 
+app.get('/export-trace', (req, res) => {
+    logger.trace('Export trace endpoint called', {
+        endpoint: '/export-trace',
+    });
+
+    try {
+        const trace = daemon.exportTrace();
+        res.json({
+            success: true,
+            data: trace,
+        });
+    } catch (error) {
+        logger.error('Export trace endpoint error', { endpoint: '/export-trace' }, error as Error);
+        res.status(500).json({
+            success: false,
+            error: error instanceof Error ? error.message : 'Internal server error',
+        });
+    }
+});
+
+app.post('/import-trace', async (req, res) => {
+    logger.trace('Import trace endpoint called', {
+        endpoint: '/import-trace',
+    });
+
+    try {
+        const { trace }: { trace: OperationTrace } = req.body;
+
+        if (!trace) {
+            return res.status(400).json({ error: 'Invalid trace data' });
+        }
+
+        const result = await daemon.importTrace(trace);
+        res.json(result);
+    } catch (error) {
+        logger.error('Import trace endpoint error', { endpoint: '/import-trace' }, error as Error);
+        res.status(500).json({
+            error: error instanceof Error ? error.message : 'Internal server error',
+        });
+    }
+});
+
 app.get('/health', (req, res) => {
     logger.trace('Health endpoint called', {
         endpoint: '/health',
@@ -1297,6 +1502,8 @@ const startServer = async () => {
         console.log(`  POST /message-templates - Create message template`);
         console.log(`  GET /message-templates - Get all message templates`);
         console.log(`  DELETE /message-templates/:id - Delete message template`);
+        console.log(`  GET /export-trace - Export operations trace`);
+        console.log(`  POST /import-trace - Import operations trace`);
         console.log(`  GET /health - Health check`);
     });
 };
