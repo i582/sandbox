@@ -925,7 +925,7 @@ class SandboxDaemon {
         };
     }
 
-    public async importTrace(trace: OperationTrace): Promise<ApiResponse> {
+    public async importTrace(trace: OperationTrace): Promise<[SandboxDaemon, ApiResponse]> {
         try {
             logger.info(`Starting import of ${trace.operations.length} operations from trace`);
 
@@ -997,22 +997,17 @@ class SandboxDaemon {
                 }
             }
 
-            this.blockchain = freshDaemon.blockchain;
-            this.contracts = freshDaemon.contracts;
-            this.contractInfos = freshDaemon.contractInfos;
-            this.operations = freshDaemon.operations;
-            this.operationsTrace = freshDaemon.operationsTrace;
-            this.snapshots = freshDaemon.snapshots;
-            this.messageTemplates = freshDaemon.messageTemplates;
-
             logger.info(`Successfully imported trace with ${trace.operations.length} operations`);
-            return { success: true, data: {} };
+            return [freshDaemon, { success: true, data: {} }];
         } catch (error) {
             logger.error('Failed to import trace', {}, error as Error);
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : 'Unknown error during trace import',
-            };
+            return [
+                daemon,
+                {
+                    success: false,
+                    error: error instanceof Error ? error.message : 'Unknown error during trace import',
+                },
+            ];
         }
     }
 }
@@ -1465,7 +1460,11 @@ app.post('/import-trace', async (req, res) => {
             return res.status(400).json({ error: 'Invalid trace data' });
         }
 
-        const result = await daemon.importTrace(trace);
+        const [newDaemon, result] = await daemon.importTrace(trace);
+        if (result.success) {
+            newDaemon.messageTemplates = daemon.messageTemplates;
+            daemon = newDaemon;
+        }
         res.json(result);
     } catch (error) {
         logger.error('Import trace endpoint error', { endpoint: '/import-trace' }, error as Error);
