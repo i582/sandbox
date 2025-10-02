@@ -175,6 +175,9 @@ const logger = Logger.getInstance();
 declare const base64Brand: unique symbol;
 export type Base64String = string & { readonly [base64Brand]: true };
 
+declare const hexBrand: unique symbol;
+export type HexString = string & { readonly [hexBrand]: true };
+
 export type ExtendedGetResult = ContractGetMethodResult & { vmLogs: string };
 
 export type DeployContractServerData = {
@@ -390,6 +393,8 @@ export interface RawTransactionInfo {
     readonly contractName: string | undefined
     readonly parentId: string | undefined
     readonly childrenIds: string[]
+    readonly oldStorage: HexString | undefined
+    readonly newStorage: HexString | undefined
 }
 
 class SandboxDaemon {
@@ -404,6 +409,7 @@ class SandboxDaemon {
         const blockchain = await Blockchain.create({ webUI: true });
         blockchain.verbosity.print = false;
         blockchain.verbosity.vmLogs = 'vm_logs_verbose';
+        blockchain.recordStorage = true
 
         const treasury = await blockchain.treasury('treasury');
         return new SandboxDaemon(blockchain, treasury);
@@ -921,6 +927,8 @@ class SandboxDaemon {
                     contractName: contract?.name,
                     parentId: t.parent?.lt.toString(),
                     childrenIds: t.children?.map((c) => c?.lt?.toString()),
+                    oldStorage: t.oldStorage?.toBoc().toString("hex") as HexString | undefined,
+                    newStorage: t.newStorage?.toBoc().toString("hex") as HexString | undefined,
                 } satisfies RawTransactionInfo;
             }),
         };
