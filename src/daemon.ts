@@ -77,11 +77,18 @@ class Logger {
             return JSON.stringify(entry);
         }
 
+        const bigintReplacer = (_: string, value: unknown): unknown => {
+            if (typeof value === 'bigint') {
+                return value.toString();
+            }
+            return value;
+        }
+
         const timestamp = new Date(entry.timestamp).toISOString();
         let logLine = `[${timestamp}] ${entry.level.toUpperCase().padEnd(5)} ${entry.message}`;
 
         if (entry.context && Object.keys(entry.context).length > 0) {
-            logLine += ` ${JSON.stringify(entry.context)}`;
+            logLine += ` ${JSON.stringify(entry.context, bigintReplacer)}`;
         }
 
         if (entry.error) {
@@ -952,7 +959,7 @@ app.post('/get', async (req, res) => {
         endpoint: '/get',
         address,
         methodId,
-        parametersLength: parameters?.length,
+        parameters,
     });
 
     try {
