@@ -8,8 +8,7 @@ import { decodePatch } from '../utils/bpatch';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const EmulatorModule = require('./emulator-emscripten.js');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-// const DebuggerEmulatorModule = require('./emulator-emscripten.debugger.js');
-const DebuggerEmulatorModule = require('./debugger-emulator-emscripten.js');
+const DebuggerEmulatorModule = require('./emulator-emscripten.debugger.js');
 
 export type BlockId = {
     workchain: number;
@@ -347,13 +346,12 @@ function getDebuggerWasmBinary() {
         return debuggerWasmBinary;
     }
 
-    wasmBinary = new Uint8Array(base64Decode(require('./debugger-emulator-emscripten.wasm.js').DebuggerEmulatorEmscriptenWasm));
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const patch = base64Decode(require('./emulator-emscripten.debugger.bpatch.gzip.js').DebuggerPatchGzip);
     const unzipped = gunzipSync(patch);
     debuggerWasmBinary = decodePatch(getWasmBinary(), unzipped);
 
-    return wasmBinary;
+    return debuggerWasmBinary;
 }
 
 export class Executor implements IExecutor {
@@ -501,7 +499,6 @@ export class Executor implements IExecutor {
             this.invoke('_destroy_emulator', [this.emulator.ptr]);
         }
         const ptr = this.invoke('_create_emulator', [config, verbosity]);
-        const ptr2 = this.invoke('_create_emulator', [config, verbosity]);
         this.emulator = {
             ptr,
             config,
@@ -624,14 +621,7 @@ export class Executor implements IExecutor {
     }
 
     sbsTransactionSetup(args: RunTransactionArgs) {
-        try {
-            this.invoke('_create_emulator', [args.config, 5]);
-        } catch (e) {
-            // console.log(this.extractString(e as number))
-            console.log(e)
-        }
-
-        const emptr = this.invoke('_create_emulator', [args.config, 5]);
+        const emptr = this.invoke('_create_emulator', [args.config, verbosityToNum[args.verbosity]]);
 
         const params: EmulationInternalParams = runCommonArgsToInternalParams(args);
 
@@ -644,8 +634,7 @@ export class Executor implements IExecutor {
             JSON.stringify(params),
         ]);
 
-        const result = JSON.parse(this.extractString(res))
-        return { result, emptr };
+        return { res, emptr };
     }
 
     destroyEmulator(ptr: number) {
@@ -667,14 +656,6 @@ export class Executor implements IExecutor {
             hash: parts[0],
             offset: parseInt(parts[1]),
         };
-    }
-
-    sbsTransactionStacktrace(ptr: number): string[] {
-        const resp = this.extractString(this.invoke('_em_sbs_stack_trace', [ptr]));
-
-        const parts = resp.split(';').filter(Boolean);
-
-        return parts;
     }
 
     sbsTransactionStack(ptr: number) {
