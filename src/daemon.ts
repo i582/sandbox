@@ -19,14 +19,14 @@ import {
     TupleReader,
 } from '@ton/core';
 
+import { TreasuryContract } from './treasury/Treasury';
 import {
     Blockchain,
     BlockchainSnapshot,
     BlockchainTransaction,
     SandboxContract,
     SendMessageResult,
-    TreasuryContract,
-} from '../src';
+} from './blockchain/Blockchain';
 import { bigintToAddress } from './blockchain/web-ui-websocket';
 
 enum LogLevel {
@@ -386,15 +386,15 @@ export interface ContractStateInfo {
 }
 
 export interface RawTransactionInfo {
-    readonly transaction: string
-    readonly fields: Record<string, unknown>
-    readonly code: string | undefined
-    readonly sourceMap: object | undefined
-    readonly contractName: string | undefined
-    readonly parentId: string | undefined
-    readonly childrenIds: string[]
-    readonly oldStorage: HexString | undefined
-    readonly newStorage: HexString | undefined
+    readonly transaction: string;
+    readonly fields: Record<string, unknown>;
+    readonly code: string | undefined;
+    readonly sourceMap: object | undefined;
+    readonly contractName: string | undefined;
+    readonly parentId: string | undefined;
+    readonly childrenIds: string[];
+    readonly oldStorage: HexString | undefined;
+    readonly newStorage: HexString | undefined;
 }
 
 class SandboxDaemon {
@@ -409,7 +409,7 @@ class SandboxDaemon {
         const blockchain = await Blockchain.create({ webUI: true });
         blockchain.verbosity.print = false;
         blockchain.verbosity.vmLogs = 'vm_logs_verbose';
-        blockchain.recordStorage = true
+        blockchain.recordStorage = true;
 
         const treasury = await blockchain.treasury('treasury');
         return new SandboxDaemon(blockchain, treasury);
@@ -927,8 +927,8 @@ class SandboxDaemon {
                     contractName: contract?.name,
                     parentId: t.parent?.lt.toString(),
                     childrenIds: t.children?.map((c) => c?.lt?.toString()),
-                    oldStorage: t.oldStorage?.toBoc().toString("hex") as HexString | undefined,
-                    newStorage: t.newStorage?.toBoc().toString("hex") as HexString | undefined,
+                    oldStorage: t.oldStorage?.toBoc().toString('hex') as HexString | undefined,
+                    newStorage: t.newStorage?.toBoc().toString('hex') as HexString | undefined,
                 } satisfies RawTransactionInfo;
             }),
         };
@@ -1500,9 +1500,30 @@ app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-const PORT = process.env.PORT || 3000;
+function parseArgs() {
+    const args = process.argv.slice(2);
+    const parsedArgs: { [key: string]: string | boolean } = {};
 
-const startServer = async () => {
+    for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg.startsWith('--')) {
+            const key = arg.slice(2);
+            const nextArg = args[i + 1];
+            if (nextArg && !nextArg.startsWith('--')) {
+                parsedArgs[key] = nextArg;
+                i++; // Skip next arg as it's a value
+            } else {
+                parsedArgs[key] = true;
+            }
+        }
+    }
+
+    return parsedArgs;
+}
+
+const PORT = parseArgs()['port'] ?? process.env.PORT ?? 3000;
+
+async function startServer() {
     await initDaemon();
     app.listen(PORT, () => {
         console.log(`Sandbox daemon server running on port ${PORT}`);
@@ -1523,13 +1544,10 @@ const startServer = async () => {
         console.log(`  POST /import-trace - Import operations trace`);
         console.log(`  GET /health - Health check`);
     });
-};
+}
 
-if (require.main === module) {
-    startServer().catch((error) => {
-        logger.fatal('Failed to start server', {}, error as Error);
-        process.exit(1);
-    });
+export async function main() {
+    await startServer();
 }
 
 export { SandboxDaemon };

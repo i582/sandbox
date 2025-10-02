@@ -1,12 +1,12 @@
 {
-  "name": "@ton/sandbox",
-  "version": "0.35.1",
+  "name": "ton-sandbox-server-dev",
+  "version": "0.0.4",
   "description": "TON transaction emulator",
   "main": "dist/index.js",
   "license": "MIT",
   "author": "TonTech",
   "bin": {
-    "sandbox-server": "./bin/sandbox-server"
+    "ton-sandbox-server": "./bin/ton-sandbox-server"
   },
   "files": [
     "jest-environment.js",
