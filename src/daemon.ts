@@ -382,6 +382,16 @@ export interface ContractStateInfo {
     readonly sourceUri: string;
 }
 
+export interface RawTransactionInfo {
+    readonly transaction: string
+    readonly fields: Record<string, unknown>
+    readonly code: string | undefined
+    readonly sourceMap: object | undefined
+    readonly contractName: string | undefined
+    readonly parentId: string | undefined
+    readonly childrenIds: string[]
+}
+
 class SandboxDaemon {
     public contracts: Map<string, SandboxContract<DaemonContract>> = new Map();
     public contractInfos: Map<string, DeployedContractInfo> = new Map();
@@ -911,7 +921,7 @@ class SandboxDaemon {
                     contractName: contract?.name,
                     parentId: t.parent?.lt.toString(),
                     childrenIds: t.children?.map((c) => c?.lt?.toString()),
-                };
+                } satisfies RawTransactionInfo;
             }),
         };
         return JSON.stringify(dump, null, 2);
