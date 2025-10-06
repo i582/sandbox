@@ -338,15 +338,6 @@ export class SmartContract {
             } else if (uninitialized) {
                 // eslint-disable-next-line no-console
                 console.log('Debugging uninitialized accounts is unsupported in debugger beta');
-
-                const executor = await this.blockchain.getDebuggerExecutor();
-                return await this.runCommon(() => debugContext.debugTransaction(executor, args, {
-                    sourceMap: {},
-                    globals: [{
-                        name: "globalVar"
-                    }],
-                    marks: new Map()
-                }));
             }
         }
 
@@ -362,7 +353,10 @@ export class SmartContract {
         );
     }
 
-    protected async runCommon(run: () => Promise<EmulationResult>, callStack?: string): Promise<SmartContractTransaction> {
+    protected async runCommon(
+        run: () => Promise<EmulationResult>,
+        callStack?: string,
+    ): Promise<SmartContractTransaction> {
         let oldStorage: Cell | undefined = undefined;
         if (this.blockchain.recordStorage && this.account.account?.storage.state.type === 'active') {
             oldStorage = this.account.account?.storage.state.state.data ?? undefined;

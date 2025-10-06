@@ -1,31 +1,31 @@
 import {
     Address,
-    Cell,
-    Message,
-    ContractProvider,
-    Contract,
-    Sender,
-    toNano,
-    loadMessage,
-    ShardAccount,
-    TupleItem,
-    ExternalAddress,
-    StateInit,
-    OpenedContract,
     beginCell,
-    storeStateInit,
-    storeShardAccount,
-    storeTransaction,
-    Transaction,
+    Cell,
+    Contract,
+    ContractProvider,
+    ExternalAddress,
+    loadMessage,
+    Message,
+    OpenedContract,
     OutActionSendMsg,
+    Sender,
+    ShardAccount,
+    StateInit,
+    storeShardAccount,
+    storeStateInit,
+    storeTransaction,
+    toNano,
+    Transaction,
+    TupleItem,
 } from '@ton/core';
 import { getSecureRandomBytes } from '@ton/crypto';
 import WebSocket from 'ws';
 
 import { defaultConfig } from '../config/defaultConfig';
-import { IExecutor, Executor, TickOrTock, PrevBlocksInfo } from '../executor/Executor';
+import { Executor, IExecutor, PrevBlocksInfo, TickOrTock } from '../executor/Executor';
 import { BlockchainStorage, LocalBlockchainStorage } from './BlockchainStorage';
-import { extractEvents, Event } from '../event/Event';
+import { Event, extractEvents } from '../event/Event';
 import { BlockchainContractProvider, SandboxContractProvider } from './BlockchainContractProvider';
 import { BlockchainSender } from './BlockchainSender';
 import { TreasuryContract } from '../treasury/Treasury';
@@ -45,8 +45,8 @@ import { collectMetric } from '../metric/collectMetric';
 import { ContractsMeta } from '../meta/ContractsMeta';
 import { deepcopy } from '../utils/deepcopy';
 import { AsyncLock } from '../utils/AsyncLock';
-import { bigintToAddress, ContractRawData, ContractStateChange, sendToWebsocket } from './web-ui-websocket';
-import {HexString, RawTransactionInfo} from "../daemon";
+import { RawContractData, RawTransactionInfo, RawTransactionsInfo, websocketSend } from './transport-websocket';
+import { HexString } from '../daemon';
 
 const CREATE_WALLETS_PREFIX = 'CREATE_WALLETS';
 
@@ -525,7 +525,7 @@ export class Blockchain {
         while (!done) {
             const message = this.messageQueue.shift()!;
 
-            let callStack: string | undefined
+            let callStack: string | undefined;
             let tx: SmartContractTransaction;
             if (message.type === 'message') {
                 callStack = message.stack;
@@ -600,42 +600,23 @@ export class Blockchain {
     }
 
     protected async processQueue(params?: MessageParams) {
-        const contractStateBeforeAfter: ContractStateChange[] = [];
-
         const txs = await this.lock.with(async () => {
-            const contractsBefore = await this.contractStates();
-
             // Locked already
             const txs = this.txIter(false, params);
             const result: BlockchainTransaction[] = [];
 
             for await (const tx of txs) {
-                const contractsAfter = await this.contractStates();
-
-                const txAddress = bigintToAddress(tx.address);
-                const contractBefore = contractsBefore.find((it) => it?.address === txAddress?.toString());
-                const contractAfter = contractsAfter.find((it) => it?.address === txAddress?.toString());
-
-                if (contractBefore && contractAfter) {
-                    contractStateBeforeAfter.push({
-                        address: txAddress?.toString(),
-                        lt: tx.lt.toString(),
-                        before: contractBefore.data,
-                        after: contractAfter.data,
-                    });
-                }
-
                 result.push(tx);
             }
 
             return result;
         });
 
-        await this.sendTransactions(txs, contractStateBeforeAfter);
+        await this.sendTransactions(txs);
         return txs;
     }
 
-    private async sendTransactions(txs: BlockchainTransaction[], changes: ContractStateChange[]) {
+    private async sendTransactions(txs: BlockchainTransaction[]) {
         if (!this.webUI) {
             return;
         }
@@ -645,14 +626,14 @@ export class Blockchain {
         const contracts = await this.contractsData();
 
         await this.websocketConnectSafe();
-        sendToWebsocket(this.ws, { $: 'test-data', testName, transactions, contracts, changes });
+        websocketSend(this.ws, { type: 'test-data', testName, transactions, contracts });
         this.websocketDisconnect();
         return txs;
     }
 
-    private async contractsData(): Promise<ContractRawData[]> {
+    private async contractsData(): Promise<RawContractData[]> {
         return Promise.all(
-            this.storage.knownContracts().map(async (contract) => {
+            this.storage.knownContracts().map(async (contract): Promise<RawContractData> => {
                 const state = contract.accountState;
                 const stateInit = beginCell();
                 if (state?.type === 'active') {
@@ -673,26 +654,13 @@ export class Blockchain {
         );
     }
 
-    private async contractStates(): Promise<({ address: string; data: string } | undefined)[]> {
-        return Promise.all(
-            this.storage.knownContracts().map(async (contract) => {
-                const state = contract.accountState;
-                if (state?.type === 'active' && state.state.data) {
-                    return {
-                        address: contract.address.toString(),
-                        data: state.state.data.toBoc().toString('hex'),
-                    };
-                }
-
-                return undefined;
-            }),
-        );
-    }
-
-    protected serializeTransactions(transactions: BlockchainTransaction[]): string {
-        const fieldsToSave = ['blockchainLogs', 'vmLogs', 'debugLogs', 'shard', 'delay', 'totalDelay'];
-        const dump = {
-            transactions: transactions.map((t) => {
+    /**
+     * Convert the ` BlockchainTransaction ` array to `RawTransactionsInfo` that can be safely sent over network.
+     * @param transactions Input transactions to serialize
+     */
+    protected serializeTransactions(transactions: BlockchainTransaction[]): RawTransactionsInfo {
+        return {
+            transactions: transactions.map((t): RawTransactionInfo => {
                 const tx = beginCell()
                     .store(storeTransaction(t as Transaction))
                     .endCell()
@@ -701,11 +669,9 @@ export class Blockchain {
 
                 return {
                     transaction: tx,
-                    fields: fieldsToSave.reduce((acc: object, f) => {
-                        // @ts-ignore
-                        acc[f] = t[f];
-                        return acc;
-                    }, {}),
+                    blockchainLogs: t.blockchainLogs,
+                    vmLogs: t.vmLogs,
+                    debugLogs: t.debugLogs,
                     code: undefined,
                     sourceMap: undefined,
                     contractName: undefined,
@@ -714,10 +680,9 @@ export class Blockchain {
                     oldStorage: t.oldStorage?.toBoc().toString('hex') as HexString | undefined,
                     newStorage: t.newStorage?.toBoc().toString('hex') as HexString | undefined,
                     callStack: t.callStack,
-                } satisfies RawTransactionInfo;
+                };
             }),
         };
-        return JSON.stringify(dump, null, 2);
     }
 
     protected async websocketConnectSafe(): Promise<void> {

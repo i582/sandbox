@@ -27,7 +27,7 @@ import {
     SandboxContract,
     SendMessageResult,
 } from './blockchain/Blockchain';
-import { bigintToAddress } from './blockchain/web-ui-websocket';
+import { bigintToAddress, RawTransactionInfo, RawTransactionsInfo } from './blockchain/transport-websocket';
 
 enum LogLevel {
     TRACE = 0,
@@ -383,19 +383,6 @@ export interface ContractStateInfo {
     };
     readonly abi?: object;
     readonly sourceUri: string;
-}
-
-export interface RawTransactionInfo {
-    readonly transaction: string;
-    readonly fields: Record<string, unknown>;
-    readonly code: string | undefined;
-    readonly sourceMap: object | undefined;
-    readonly contractName: string | undefined;
-    readonly parentId: string | undefined;
-    readonly childrenIds: string[];
-    readonly oldStorage: HexString | undefined;
-    readonly newStorage: HexString | undefined;
-    readonly callStack: string | undefined;
 }
 
 class SandboxDaemon {
@@ -904,9 +891,8 @@ class SandboxDaemon {
     }
 
     public serializeTransactions(transactions: BlockchainTransaction[]): string {
-        const fieldsToSave = ['blockchainLogs', 'vmLogs', 'debugLogs', 'shard', 'delay', 'totalDelay'];
-        const dump = {
-            transactions: transactions.map((t) => {
+        const dump: RawTransactionsInfo = {
+            transactions: transactions.map((t): RawTransactionInfo => {
                 const tx = beginCell()
                     .store(storeTransaction(t as Transaction))
                     .endCell()
@@ -918,11 +904,9 @@ class SandboxDaemon {
 
                 return {
                     transaction: tx,
-                    fields: fieldsToSave.reduce((acc: object, f) => {
-                        // @ts-ignore
-                        acc[f] = t[f];
-                        return acc;
-                    }, {}),
+                    blockchainLogs: t.blockchainLogs,
+                    vmLogs: t.vmLogs,
+                    debugLogs: t.debugLogs,
                     code: contract?.init?.code?.toBoc().toString('hex'),
                     sourceMap: contract?.sourceMap,
                     contractName: contract?.name,
@@ -930,8 +914,8 @@ class SandboxDaemon {
                     childrenIds: t.children?.map((c) => c?.lt?.toString()),
                     oldStorage: t.oldStorage?.toBoc().toString('hex') as HexString | undefined,
                     newStorage: t.newStorage?.toBoc().toString('hex') as HexString | undefined,
-                    callStack: undefined,
-                } satisfies RawTransactionInfo;
+                    callStack: t.callStack,
+                };
             }),
         };
         return JSON.stringify(dump, null, 2);

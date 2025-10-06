@@ -342,16 +342,16 @@ export class TVMDebugSession extends LoggingDebugSession {
             // vars = this.debuggee.getLocalVariables();
             vars = [
                 {
-                    name: "c7",
-                    value: this.debuggee.getC7()
-                }
-            ]
+                    name: 'c7',
+                    value: this.debuggee.getC7(),
+                },
+            ];
         } else if (args.variablesReference === TVMDebugSession.globalVariablesReference) {
             vars = this.debuggee.getGlobalVariables();
             vars?.push({
-                name: "c7",
-                value: this.debuggee.getC7()
-            })
+                name: 'c7',
+                value: this.debuggee.getC7(),
+            });
         } else if (args.variablesReference === TVMDebugSession.stackReference) {
             const stack = [...this.debuggee.getStack().entries()].reverse();
             vars = stack.map(([index, it]) => ({

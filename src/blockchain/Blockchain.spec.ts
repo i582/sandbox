@@ -15,11 +15,11 @@ import {
     SendMode,
     type StateInit,
     TupleBuilder,
-    TupleReader
+    TupleReader,
 } from '@ton/core';
 import { compareTransaction, flattenTransaction, randomAddress } from '@ton/test-utils';
 import { getSecureRandomBytes } from '@ton/crypto';
-import {runTolkCompiler} from "@ton/tolk-js";
+import { runTolkCompiler } from '@ton/tolk-js';
 
 import { Blockchain, BlockchainTransaction, type SandboxContract } from './Blockchain';
 import { TreasuryContract } from '../treasury/Treasury';
@@ -1052,17 +1052,14 @@ describe('Blockchain', () => {
     });
 });
 
-export const executeInstructions = async (
-    codeCell: Cell,
-    id: number = 0,
-): Promise<[TupleReader, string]> => {
+export const executeInstructions = async (codeCell: Cell, id: number = 0): Promise<[TupleReader, string]> => {
     class TestContract implements Contract {
-        public readonly address: Address
-        public readonly init?: StateInit
+        public readonly address: Address;
+        public readonly init?: StateInit;
 
         public constructor(address: Address, init?: StateInit) {
-            this.address = address
-            this.init = init
+            this.address = address;
+            this.init = init;
         }
 
         public async send(
@@ -1071,35 +1068,32 @@ export const executeInstructions = async (
             args: { value: bigint; bounce?: boolean | null | undefined },
             body: Cell,
         ) {
-            await provider.internal(via, {...args, body: body})
+            await provider.internal(via, { ...args, body: body });
         }
 
-        public async getAny(
-            provider: ContractProvider,
-            id: number,
-        ): Promise<[TupleReader, string]> {
-            const builder = new TupleBuilder()
-            const res = await provider.get(id, builder.build())
+        public async getAny(provider: ContractProvider, id: number): Promise<[TupleReader, string]> {
+            const builder = new TupleBuilder();
+            const res = await provider.get(id, builder.build());
 
             // @ts-expect-error TS2551
-            return [res.stack, res.vmLogs]
+            return [res.stack, res.vmLogs];
         }
     }
 
-    const blockchain: Blockchain = await Blockchain.create()
-    blockchain.verbosity.print = false
-    blockchain.verbosity.vmLogs = "vm_logs_verbose"
-    const treasure: SandboxContract<TreasuryContract> = await blockchain.treasury("treasure")
+    const blockchain: Blockchain = await Blockchain.create();
+    blockchain.verbosity.print = false;
+    blockchain.verbosity.vmLogs = 'vm_logs_verbose';
+    const treasure: SandboxContract<TreasuryContract> = await blockchain.treasury('treasure');
 
     const init: StateInit = {
         code: codeCell,
         data: beginCell().storeUint(0, 32).storeUint(1, 32).endCell(),
-    }
+    };
 
-    const address = contractAddress(0, init)
-    const contract = new TestContract(address, init)
+    const address = contractAddress(0, init);
+    const contract = new TestContract(address, init);
 
-    const openContract = blockchain.openContract(contract)
+    const openContract = blockchain.openContract(contract);
 
     const contract2 = await blockchain.getContract(contract.address);
     contract2.setDebug(true);
@@ -1108,15 +1102,14 @@ export const executeInstructions = async (
     await openContract.send(
         treasure.getSender(),
         {
-            value: toNano("10"),
+            value: toNano('10'),
         },
         beginCell().storeUint(0x3a752f06, 32).storeUint(0, 32).endCell(),
-    )
+    );
 
-    const [stack, vmLogs] = await openContract.getAny(id)
-    return [stack, vmLogs]
-}
-
+    const [stack, vmLogs] = await openContract.getAny(id);
+    return [stack, vmLogs];
+};
 
 describe('debug', () => {
     it('should debug', async () => {
@@ -1222,25 +1215,25 @@ get fun initialId(): int {
     return storage.id;
 }
 
-        `)
+        `);
         if (!res) {
-            return
+            return;
         }
 
-        const execRes = await executeInstructions(res, 117456)
-        console.log(execRes)
+        const execRes = await executeInstructions(res, 117456);
+        console.log(execRes);
     }, 100_0000);
 });
 
 export const compileTolkCode = async (code: string): Promise<Cell | undefined> => {
     const result = await runTolkCompiler({
-        entrypointFileName: "main.tolk",
+        entrypointFileName: 'main.tolk',
         fsReadCallback: () => code,
         withStackComments: true,
         withSrcLineComments: true,
-    })
-    if (result.status === "error") {
-        throw new Error(result.message)
+    });
+    if (result.status === 'error') {
+        throw new Error(result.message);
     }
-    return Cell.fromBase64(result.codeBoc64)
-}
+    return Cell.fromBase64(result.codeBoc64);
+};
