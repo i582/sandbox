@@ -138,7 +138,7 @@ export function toSandboxContract<T>(contract: OpenedContract<T>): SandboxContra
 export type PendingMessage = (
     | ({
           type: 'message';
-          stack?: string;
+          callStack?: string;
           mode?: number;
       } & Message)
     | {
@@ -481,7 +481,7 @@ export class Blockchain {
         await this.lock.with(async () => {
             this.messageQueue.push({
                 type: 'message',
-                stack: new Error().stack,
+                callStack: this.useWebsocket ? new Error().stack : undefined,
                 ...msg,
             });
         });
@@ -528,7 +528,7 @@ export class Blockchain {
             let callStack: string | undefined;
             let tx: SmartContractTransaction;
             if (message.type === 'message') {
-                callStack = message.stack;
+                callStack = message.callStack;
                 if (message.info.type === 'external-out') {
                     done = this.messageQueue.length == 0;
                     continue;
@@ -577,7 +577,7 @@ export class Blockchain {
                     type: 'message',
                     parentTransaction: transaction,
                     mode: sendMsgActions[index]?.mode,
-                    stack: callStack,
+                    callStack,
                     ...message,
                 });
 

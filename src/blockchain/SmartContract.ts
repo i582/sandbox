@@ -334,7 +334,7 @@ export class SmartContract {
             const { uninitialized, debugInfo } = debugContext.getDebugInfo(this.account);
             if (debugInfo !== undefined) {
                 const executor = await this.blockchain.getDebuggerExecutor();
-                return await this.runCommon(() => debugContext.debugTransaction(executor, args, debugInfo));
+                return await this.runCommon(() => debugContext.debugTransaction(executor, args, debugInfo), callStack);
             } else if (uninitialized) {
                 // eslint-disable-next-line no-console
                 console.log('Debugging uninitialized accounts is unsupported in debugger beta');
