@@ -395,6 +395,7 @@ export interface RawTransactionInfo {
     readonly childrenIds: string[];
     readonly oldStorage: HexString | undefined;
     readonly newStorage: HexString | undefined;
+    readonly callStack: string | undefined;
 }
 
 class SandboxDaemon {
@@ -406,7 +407,7 @@ class SandboxDaemon {
     public operationsTrace: OperationTraceItem[] = [];
 
     public static async create(): Promise<SandboxDaemon> {
-        const blockchain = await Blockchain.create({ webUI: true });
+        const blockchain = await Blockchain.create();
         blockchain.verbosity.print = false;
         blockchain.verbosity.vmLogs = 'vm_logs_verbose';
         blockchain.recordStorage = true;
@@ -929,6 +930,7 @@ class SandboxDaemon {
                     childrenIds: t.children?.map((c) => c?.lt?.toString()),
                     oldStorage: t.oldStorage?.toBoc().toString('hex') as HexString | undefined,
                     newStorage: t.newStorage?.toBoc().toString('hex') as HexString | undefined,
+                    callStack: undefined,
                 } satisfies RawTransactionInfo;
             }),
         };

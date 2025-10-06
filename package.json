@@ -1,6 +1,6 @@
 {
   "name": "ton-sandbox-server-dev",
-  "version": "0.0.4",
+  "version": "0.0.10",
   "description": "TON transaction emulator",
   "main": "dist/index.js",
   "license": "MIT",

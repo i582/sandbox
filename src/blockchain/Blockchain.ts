@@ -46,6 +46,7 @@ import { ContractsMeta } from '../meta/ContractsMeta';
 import { deepcopy } from '../utils/deepcopy';
 import { AsyncLock } from '../utils/AsyncLock';
 import { bigintToAddress, ContractRawData, ContractStateChange, sendToWebsocket } from './web-ui-websocket';
+import {HexString, RawTransactionInfo} from "../daemon";
 
 const CREATE_WALLETS_PREFIX = 'CREATE_WALLETS';
 
@@ -137,6 +138,7 @@ export function toSandboxContract<T>(contract: OpenedContract<T>): SandboxContra
 export type PendingMessage = (
     | ({
           type: 'message';
+          stack?: string;
           mode?: number;
       } & Message)
     | {
@@ -479,6 +481,7 @@ export class Blockchain {
         await this.lock.with(async () => {
             this.messageQueue.push({
                 type: 'message',
+                stack: new Error().stack,
                 ...msg,
             });
         });
@@ -522,15 +525,17 @@ export class Blockchain {
         while (!done) {
             const message = this.messageQueue.shift()!;
 
+            let callStack: string | undefined
             let tx: SmartContractTransaction;
             if (message.type === 'message') {
+                callStack = message.stack;
                 if (message.info.type === 'external-out') {
                     done = this.messageQueue.length == 0;
                     continue;
                 }
 
                 this.currentLt += LT_ALIGN;
-                tx = await (await this.getContract(message.info.dest)).receiveMessage(message, params);
+                tx = await (await this.getContract(message.info.dest)).receiveMessage(message, params, callStack);
             } else {
                 this.currentLt += LT_ALIGN;
                 tx = await (await this.getContract(message.on)).runTickTock(message.which, params);
@@ -572,6 +577,7 @@ export class Blockchain {
                     type: 'message',
                     parentTransaction: transaction,
                     mode: sendMsgActions[index]?.mode,
+                    stack: callStack,
                     ...message,
                 });
 
@@ -634,7 +640,7 @@ export class Blockchain {
             return;
         }
 
-        const testName = "unknown" // expect === undefined ? "" : expect.getState().currentTestName;
+        const testName = expect === undefined ? '' : expect.getState().currentTestName;
         const transactions = this.serializeTransactions(txs);
         const contracts = await this.contractsData();
 
@@ -695,14 +701,20 @@ export class Blockchain {
 
                 return {
                     transaction: tx,
-                    fields: fieldsToSave.reduce((acc: any, f) => {
+                    fields: fieldsToSave.reduce((acc: object, f) => {
                         // @ts-ignore
                         acc[f] = t[f];
                         return acc;
                     }, {}),
+                    code: undefined,
+                    sourceMap: undefined,
+                    contractName: undefined,
                     parentId: t.parent?.lt.toString(),
                     childrenIds: t.children?.map((c) => c?.lt?.toString()),
-                };
+                    oldStorage: t.oldStorage?.toBoc().toString('hex') as HexString | undefined,
+                    newStorage: t.newStorage?.toBoc().toString('hex') as HexString | undefined,
+                    callStack: t.callStack,
+                } satisfies RawTransactionInfo;
             }),
         };
         return JSON.stringify(dump, null, 2);
