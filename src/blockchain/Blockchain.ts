@@ -214,7 +214,7 @@ export class Blockchain {
     protected nextCreateWalletIndex = 0;
     protected shouldRecordStorage = false;
     protected meta?: ContractsMeta;
-    protected webUI: boolean;
+    protected useWebsocket: boolean;
     protected connectionOptions: ConnectionOptions;
     protected ws: WebSocket | undefined = undefined;
     protected prevBlocksInfo?: PrevBlocksInfo;
@@ -326,14 +326,14 @@ export class Blockchain {
         config?: BlockchainConfig;
         storage: BlockchainStorage;
         meta?: ContractsMeta;
-        webUI?: boolean;
+        useWebsocket?: boolean;
         connectionOptions?: ConnectionOptions;
     }) {
         this.networkConfig = blockchainConfigToBase64(opts.config);
         this.executor = opts.executor;
         this.storage = opts.storage;
         this.meta = opts.meta;
-        this.webUI = opts.webUI ?? false;
+        this.useWebsocket = opts.useWebsocket ?? false;
         this.connectionOptions = opts.connectionOptions ?? { port: 7743, host: 'localhost' };
     }
 
@@ -612,12 +612,12 @@ export class Blockchain {
             return result;
         });
 
-        await this.sendTransactions(txs);
+        await this.publishTransactions(txs);
         return txs;
     }
 
-    private async sendTransactions(txs: BlockchainTransaction[]) {
-        if (!this.webUI) {
+    private async publishTransactions(txs: BlockchainTransaction[]) {
+        if (!this.useWebsocket) {
             return;
         }
 
@@ -983,6 +983,7 @@ export class Blockchain {
      * @param [opts.config] Config used in blockchain. If omitted {@link defaultConfig} is used.
      * @param [opts.storage] Contracts storage used for blockchain. If omitted {@link LocalBlockchainStorage} is used.
      * @param [opts.meta] Optional contracts metadata provider. If not provided, {@link @ton/test-utils.contractsMeta} will be used to accumulate contracts metadata.
+     * @param [opts.useWebsocket] Send data to websocket using `opts.connectionOptions` options.
      * @example
      * const blockchain = await Blockchain.create({ config: 'slim' });
      *
@@ -1000,9 +1001,25 @@ export class Blockchain {
         config?: BlockchainConfig;
         storage?: BlockchainStorage;
         meta?: ContractsMeta;
-        webUI?: boolean;
+        useWebsocket?: boolean;
         connectionOptions?: ConnectionOptions;
     }) {
+        const useWebsocket = opts?.useWebsocket ?? process.env['SANDBOX_USE_WEBSOCKET'] === 'true';
+
+        if (
+            opts?.connectionOptions === undefined &&
+            process.env['SANDBOX_WEBSOCKET_HOST'] !== undefined &&
+            process.env['SANDBOX_WEBSOCKET_PORT'] !== undefined
+        ) {
+            opts = {
+                ...opts,
+                connectionOptions: {
+                    host: process.env['SANDBOX_WEBSOCKET_HOST'],
+                    port: Number.parseInt(process.env['SANDBOX_WEBSOCKET_PORT']),
+                },
+            };
+        }
+
         const blockchain = new Blockchain({
             executor: opts?.executor ?? (await Executor.create()),
             storage: opts?.storage ?? new LocalBlockchainStorage(),
@@ -1010,7 +1027,7 @@ export class Blockchain {
             meta: opts?.meta ?? require('@ton/test-utils')?.contractsMeta,
             ...opts,
         });
-        if (opts?.webUI) {
+        if (useWebsocket) {
             blockchain.verbosity.print = false;
             blockchain.verbosity.vmLogs = 'vm_logs_verbose';
             await blockchain.websocketConnectSafe();
